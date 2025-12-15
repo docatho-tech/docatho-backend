@@ -22,6 +22,7 @@ class Medicine(BaseModel):
     category = models.ForeignKey(
         Category, on_delete=models.CASCADE, related_name="medicines"
     )
+    image_url = models.URLField(blank=True, null=True)
     manufacturer = models.CharField(max_length=255, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
     price = models.DecimalField(
