@@ -1,0 +1,7 @@
+# PostgreSQL
+# ------------------------------------------------------------------------------
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=docatho_backend
+POSTGRES_USER=FwaltQolZhYQxzpmdsPKEDzChzGDrGXV
+POSTGRES_PASSWORD=bI9zRf51UGifmphuQU0oFev78SchDaxSy7xCcq83Q0zsHXKOLyS2JwnE3aSeTce4
