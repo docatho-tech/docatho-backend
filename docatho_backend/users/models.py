@@ -34,6 +34,25 @@ class User(AbstractUser):
 
     objects: ClassVar[UserManager] = UserManager()
 
+    def __str__(self) -> str:
+        """Return a plain string for the user suitable for display in admin and logs.
+
+        Prefer the E.164 form of the phone number if available, otherwise fall
+        back to the user's name, then id.
+        """
+        phone = getattr(self, "phone", None)
+        if phone is not None:
+            # PhoneNumberField yields a PhoneNumber object; prefer as_e164
+            phone_e164 = getattr(phone, "as_e164", None)
+            if phone_e164:
+                return phone_e164
+            return str(phone)
+
+        if self.name:
+            return self.name
+
+        return str(getattr(self, "id", ""))
+
     def get_absolute_url(self) -> str:
         """Get URL for user's detail view.
 
@@ -41,24 +60,28 @@ class User(AbstractUser):
             str: URL for user detail.
 
         """
-        return reverse("users:detail", kwargs={"pk": self.id})
+        return reverse("users:detail", kwargs={"pk": self.phone})
 
 
 class PhoneOtp(BaseModel):
     """Stores OTP codes for mobile authentication flows."""
 
-    phone_number = models.CharField(max_length=32, unique=True, db_index=True)
+    # Use PhoneNumberField so phone objects are stored in canonical form.
+    phone_number = PhoneNumberField(max_length=32, unique=True, db_index=True)
     otp = models.CharField(max_length=8)
 
-    class Meta:
+    class Meta(BaseModel.Meta):
         ordering = ["-updated_at"]
         verbose_name = "Phone OTP"
         verbose_name_plural = "Phone OTPs"
 
     def __str__(self) -> str:  # pragma: no cover
-        return f"PhoneOtp<{self.phone_number}>{self.otp}"
+        # PhoneNumberField returns a PhoneNumber object; prefer .as_e164 when available
+        phone_repr = getattr(self.phone_number, "as_e164", None)
+        if phone_repr is None:
+            phone_repr = str(self.phone_number)
+        return f"PhoneOtp<{phone_repr}>{self.otp}"
 
     def refresh_code(self, otp: str) -> None:
         self.otp = otp
         self.save(update_fields=["otp", "updated_at"])
-

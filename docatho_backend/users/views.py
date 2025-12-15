@@ -71,10 +71,16 @@ class SendOTPApiView(APIView):
 
         user = _find_user_for_phone(phone_number)
         if not user:
-            return Response(
-                {"detail": "User not found"},
-                status=status.HTTP_404_NOT_FOUND,
+            otp_obj, _ = PhoneOtp.objects.get_or_create(
+                phone_number=phone_number,
+                defaults={"otp": otp_value},
             )
+            otp_obj.refresh_code(otp_value)
+            logger.info("OTP sent for new user %s", phone_number)
+            return Response(
+                {"detail": "OTP Sent Successfully"}, status=status.HTTP_200_OK
+            )
+
         if not user.is_active:
             return Response(
                 {"detail": "User is inactive"},
@@ -103,11 +109,31 @@ class VerifyOtpAPIView(APIView):
         otp_value = serializer.validated_data["otp"]
 
         user = _find_user_for_phone(phone_number)
-        if not user:
+
+        try:
+            otp_obj = PhoneOtp.objects.get(phone_number=phone_number)
+            if user and otp_obj:
+                is_otp_correct = otp_value == (otp_obj.otp or "").strip()
+                if not is_otp_correct:
+                    return Response(
+                        {"detail": "Invalid OTP"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response({"detail": "OTP verified"}, status=status.HTTP_200_OK)
+            if not user and otp_obj:
+                is_otp_correct = otp_value == (otp_obj.otp or "").strip()
+                if is_otp_correct:
+                    return Response(
+                        {"detail": "OTP verified", "registered": False},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response({"detail": "OTP verified"}, status=status.HTTP_200_OK)
+        except PhoneOtp.DoesNotExist:
             return Response(
-                {"detail": "User not found"},
-                status=status.HTTP_404_NOT_FOUND,
+                {"detail": "OTP not found"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
+
         if not user.is_active:
             return Response(
                 {"detail": "User is inactive"},
