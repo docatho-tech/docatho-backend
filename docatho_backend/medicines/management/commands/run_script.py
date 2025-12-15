@@ -125,18 +125,18 @@ class Command(BaseCommand):
                     medicine.save()
                     updated += 1
 
-            # ensure slug
-            if not getattr(medicine, "slug", None):
-                base = slugify(medicine.name)[:230]
-                slug = base
-                suffix = 1
-                while (
-                    Medicine.objects.filter(slug=slug).exclude(pk=medicine.pk).exists()
-                ):
-                    slug = f"{base}-{suffix}"
-                    suffix += 1
-                medicine.slug = slug
-                medicine.save()
+            # # ensure slug
+            # if not getattr(medicine, "slug", None):
+            #     base = slugify(medicine.name)[:230]
+            #     slug = base
+            #     suffix = 1
+            #     while (
+            #         Medicine.objects.filter(slug=slug).exclude(pk=medicine.pk).exists()
+            #     ):
+            #         slug = f"{base}-{suffix}"
+            #         suffix += 1
+            #     medicine.slug = slug
+            #     medicine.save()
 
             # attach category if provided
             if cat:
