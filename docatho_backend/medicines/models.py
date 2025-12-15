@@ -6,7 +6,7 @@ from decimal import Decimal
 from docatho_backend.masters.models import BaseModel
 
 
-class Caegory(BaseModel):
+class Category(BaseModel):
     name = models.CharField(max_length=255)
     image_url = models.URLField(blank=True, null=True)
 
@@ -20,7 +20,7 @@ class Caegory(BaseModel):
 class Medicine(BaseModel):
     name = models.CharField(max_length=255)
     category = models.ForeignKey(
-        Caegory, on_delete=models.CASCADE, related_name="medicines"
+        Category, on_delete=models.CASCADE, related_name="medicines"
     )
     manufacturer = models.CharField(max_length=255, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
