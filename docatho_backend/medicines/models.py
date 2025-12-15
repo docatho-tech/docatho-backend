@@ -9,6 +9,7 @@ from docatho_backend.masters.models import BaseModel
 class Category(BaseModel):
     name = models.CharField(max_length=255)
     image_url = models.URLField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -19,9 +20,8 @@ class Category(BaseModel):
 
 class Medicine(BaseModel):
     name = models.CharField(max_length=255)
-    category = models.ForeignKey(
-        Category, on_delete=models.CASCADE, related_name="medicines"
-    )
+    category = models.ManyToManyField(Category, related_name="medicines")
+    content = models.TextField(blank=True, null=True)
     image_url = models.URLField(blank=True, null=True)
     manufacturer = models.CharField(max_length=255, blank=True, null=True)
     description = models.TextField(blank=True, null=True)

@@ -13,7 +13,6 @@ class CategoryAdmin(admin.ModelAdmin):
 class MedicineAdmin(admin.ModelAdmin):
     list_display = (
         "name",
-        "category",
         "manufacturer",
         "price",
         "mrp",

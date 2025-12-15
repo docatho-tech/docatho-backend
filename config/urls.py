@@ -20,6 +20,10 @@ urlpatterns = [
     path(settings.ADMIN_URL, admin.site.urls),
     # User management
     path("api/", include("docatho_backend.users.urls", namespace="users")),
+    path(
+        "api/medicines/",
+        include("docatho_backend.medicines.urls", namespace="medicines"),
+    ),
     path("accounts/", include("allauth.urls")),
     # Your stuff: custom urls includes go here
     # ...
