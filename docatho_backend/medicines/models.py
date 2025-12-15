@@ -29,5 +29,5 @@ class Medicine(BaseModel):
         max_digits=10, decimal_places=2, default=Decimal("0.00")
     )
     stock = models.PositiveIntegerField(default=0)
-    slug = models.SlugField(max_length=255, unique=True, blank=True)
     mrp = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    is_active = models.BooleanField(default=True)
