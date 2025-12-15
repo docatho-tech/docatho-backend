@@ -184,6 +184,7 @@ dependencies = [
     "phonenumbers>=9.0.20",
     "pillow==12.0.0",
     "psycopg[c]==3.3.2",
+    "python-decouple>=3.8",
     "python-slugify==8.0.4",
     "redis==7.1.0",
 ]
