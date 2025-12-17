@@ -119,12 +119,15 @@ class VerifyOtpAPIView(APIView):
                         {"detail": "Invalid OTP"},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                return Response({"detail": "OTP verified"}, status=status.HTTP_200_OK)
+                return Response(
+                    {"detail": "OTP verified", "registered": False},
+                    status=status.HTTP_200_OK,
+                )
             if not user and otp_obj:
                 is_otp_correct = otp_value == (otp_obj.otp or "").strip()
                 if is_otp_correct:
                     return Response(
-                        {"detail": "OTP verified", "registered": False},
+                        {"detail": "OTP verified", "registered": True},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 return Response({"detail": "OTP verified"}, status=status.HTTP_200_OK)
