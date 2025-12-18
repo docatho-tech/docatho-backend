@@ -99,6 +99,8 @@ LOCAL_APPS = [
     "docatho_backend.users",
     "docatho_backend.providers",
     "docatho_backend.medicines",
+    "docatho_backend.orders",
+    "docatho_backend.cart",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
