@@ -27,6 +27,7 @@ urlpatterns = [
     path("accounts/", include("allauth.urls")),
     # Your stuff: custom urls includes go here
     path("api/", include("docatho_backend.cart.urls")),
+    path("api/", include("docatho_backend.orders.urls")),
     # Media files
     *static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT),
 ]
