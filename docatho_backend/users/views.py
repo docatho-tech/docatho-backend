@@ -7,7 +7,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView
 from django.views.generic import RedirectView
 from django.views.generic import UpdateView
-from rest_framework import permissions
+from rest_framework import permissions, serializers
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
@@ -171,6 +171,33 @@ class VerifyOtpAPIView(APIView):
         token, _ = Token.objects.get_or_create(user=user)
 
         return Response({"Token": token.key}, status=status.HTTP_200_OK)
+
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("name", "dob")
+        extra_kwargs = {
+            "name": {"required": False, "allow_blank": True},
+            "dob": {"required": False, "allow_null": True},
+        }
+
+
+class UpdateProfileAPIView(APIView):
+    """
+    PATCH /api/users/update-profile/  - update current user's profile fields (except phone/email)
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request):
+        user = request.user
+        serializer = UserUpdateSerializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {"detail": "Profile updated successfully", "user": serializer.data},
+            status=status.HTTP_200_OK,
+        )
 
 
 class RegisterView(APIView):
