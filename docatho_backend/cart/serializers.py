@@ -52,5 +52,6 @@ class CartSerializer(serializers.ModelSerializer):
             "discount_type",
             "total",
             "items",
+            
         )
         read_only_fields = ("total_mrp", "subtotal", "total", "items")

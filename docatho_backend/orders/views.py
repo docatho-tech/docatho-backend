@@ -10,6 +10,9 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
+from docatho_backend.orders.paginators import GenericPagination
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters
 from .models import Order, OrderItem, Transaction
 from .razorpay import RazorpayClient
 from docatho_backend.cart.models import Cart, CartItem
@@ -41,6 +44,34 @@ class OrderSerializer(serializers.ModelSerializer):
             "id",
             "order_number",
             "user",
+            "address",
+            "status",
+            "payment_status",
+            "subtotal",
+            "total_mrp",
+            "delivery_fee",
+            "discount_amount",
+            "total",
+            "placed_at",
+            "estimated_delivery_start",
+            "estimated_delivery_end",
+            "items",
+        )
+
+
+class AdminOrderSerializer(serializers.ModelSerializer):
+    items = OrderItemSerializer(many=True, read_only=True)
+    user_name = serializers.CharField(source="user.name", read_only=True)
+    user_phone = serializers.CharField(source="user.phone", read_only=True)
+
+    class Meta:
+        model = Order
+        fields = (
+            "id",
+            "order_number",
+            "user",
+            "user_name",
+            "user_phone",
             "address",
             "status",
             "payment_status",
@@ -151,7 +182,7 @@ class OrderViewSet(viewsets.ViewSet):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-            cart.save(update_fields=[ "updated_at"])
+            cart.save(update_fields=["updated_at"])
 
         # return order + razorpay payload (client will use rp_order['id'] etc)
         out = {
@@ -226,3 +257,25 @@ def razorpay_webhook(request):
 
     # always return 200 for valid handling
     return Response({"status": "ok", "event": payload.get("event")})
+
+
+class AdminOrderList(viewsets.ReadOnlyModelViewSet):
+    """
+    Viewset for admin users to list and retrieve all orders.
+    """
+
+    permission_classes = (IsAuthenticated,)
+    pagination_class = GenericPagination
+    serializer_class = AdminOrderSerializer
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter)
+    filterset_fields = ["status", "payment_status"]
+    search_fields = ["order_number", "user__name", "user__phone"]
+    queryset = Order.objects.all().order_by("-placed_at")
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if not self.request.user.is_staff:
+            self.permission_denied(
+                self.request, message="User does not have admin privileges."
+            )
+        return permissions
