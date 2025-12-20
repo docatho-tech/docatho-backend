@@ -58,13 +58,8 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class CheckoutSerializer(serializers.Serializer):
     address_id = serializers.IntegerField(required=False)
-    delivery_fee = serializers.DecimalField(
-        max_digits=12, decimal_places=2, required=False, default=Decimal("0.00")
-    )
-    discount_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=2, required=False, default=Decimal("0.00")
-    )
-    # optional: client can pass metadata
+    # delivery fee and discount should NOT come from frontend.
+    # a fixed 15% discount is applied to all orders (see checkout logic).
     notes = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -93,6 +88,10 @@ class OrderViewSet(viewsets.ViewSet):
         """
         Create an Order from the user's open Cart and create a Razorpay order.
         Returns Razorpay order payload to use on client for checkout.
+
+        Business rules:
+         - delivery_fee is 0 (server controlled)
+         - a fixed 15% discount (of subtotal) is applied to all orders
         """
         serializer = CheckoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -105,16 +104,17 @@ class OrderViewSet(viewsets.ViewSet):
             )
 
         with db_transaction.atomic():
-            # create order
+            # create order (initial totals will be recalculated later)
             order_number = f"ORD{uuid4().hex[:12].upper()}"
             order = Order.objects.create(
                 order_number=order_number,
                 user=request.user,
                 address_id=data.get("address_id") or cart.address_id,
-                delivery_fee=data.get("delivery_fee", Decimal("0.00")),
-                discount_amount=data.get("discount_amount", Decimal("0.00")),
+                delivery_fee=Decimal("0.00"),  # server controlled
+                discount_amount=Decimal("0.00"),
                 notes=data.get("notes", "") or "",
             )
+
             # move cart items into order items (snapshot prices)
             for it in cart.items.select_related("medicine").all():
                 OrderItem.objects.create(
@@ -126,7 +126,19 @@ class OrderViewSet(viewsets.ViewSet):
                     prescription_required=False,
                 )
 
-            # recalc totals and persist
+            # recalc totals to compute subtotal
+            order.recalc_totals()
+
+            # apply fixed 15% discount on subtotal (server-side rule)
+            discount_percent = Decimal("15.0")
+            discount_amount = (
+                order.subtotal * (discount_percent / Decimal("100"))
+            ).quantize(Decimal("0.01"))
+            # ensure discount does not exceed subtotal
+            if discount_amount > order.subtotal:
+                discount_amount = order.subtotal
+            order.discount_amount = discount_amount
+            order.delivery_fee = Decimal("0.00")
             order.recalc_totals()
 
             # create razorpay order
@@ -134,12 +146,12 @@ class OrderViewSet(viewsets.ViewSet):
             try:
                 rp_order = client.create_order(order)
             except Exception as exc:
-                # revert cart status on failure
-                cart.save(update_fields=["updated_at"])
                 return Response(
                     {"detail": "failed to create razorpay order", "error": str(exc)},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
+
+            cart.save(update_fields=[ "updated_at"])
 
         # return order + razorpay payload (client will use rp_order['id'] etc)
         out = {
