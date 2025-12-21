@@ -34,6 +34,10 @@ class User(AbstractUser):
 
     objects: ClassVar[UserManager] = UserManager()
 
+    @property
+    def address(self):
+        return self.addresses.first()
+
     def __str__(self) -> str:
         """Return a plain string for the user suitable for display in admin and logs.
 

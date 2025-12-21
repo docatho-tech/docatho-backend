@@ -88,7 +88,7 @@ class AdminOrderSerializer(serializers.ModelSerializer):
 
 
 class CheckoutSerializer(serializers.Serializer):
-    address_id = serializers.IntegerField(required=False)
+    # address_id = serializers.IntegerField(required=False)
     # delivery fee and discount should NOT come from frontend.
     # a fixed 15% discount is applied to all orders (see checkout logic).
     notes = serializers.CharField(required=False, allow_blank=True)
@@ -137,10 +137,11 @@ class OrderViewSet(viewsets.ViewSet):
         with db_transaction.atomic():
             # create order (initial totals will be recalculated later)
             order_number = f"ORD{uuid4().hex[:12].upper()}"
+            address = request.user.address
             order = Order.objects.create(
                 order_number=order_number,
                 user=request.user,
-                address_id=data.get("address_id") or cart.address_id,
+                address=address,
                 delivery_fee=Decimal("0.00"),  # server controlled
                 discount_amount=Decimal("0.00"),
                 notes=data.get("notes", "") or "",
@@ -216,6 +217,18 @@ class OrderViewSet(viewsets.ViewSet):
                 {"detail": "confirmation failed", "error": str(exc)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        # empty the user's cart on successful payment
+        if tr.succeeded:
+            try:
+                cart = Cart.objects.filter(user=tr.order.user).first()
+                if cart and cart.items.exists():
+                    with db_transaction.atomic():
+                        cart.items.all().delete()
+                        cart.save(update_fields=["updated_at"])
+            except Exception:
+                # Do not block payment confirmation response if cart clearing fails
+                pass
 
         # return transaction + order state
         return Response(
