@@ -16,6 +16,7 @@ from rest_framework import filters
 from .models import Order, OrderItem, Transaction
 from .razorpay import RazorpayClient
 from docatho_backend.cart.models import Cart, CartItem
+from docatho_backend.users.views import AddressSerializer
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -37,6 +38,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
+    address = AddressSerializer(read_only=True)
 
     class Meta:
         model = Order
@@ -63,6 +65,7 @@ class AdminOrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     user_name = serializers.CharField(source="user.name", read_only=True)
     user_phone = serializers.CharField(source="user.phone", read_only=True)
+    address = AddressSerializer(read_only=True)
 
     class Meta:
         model = Order
