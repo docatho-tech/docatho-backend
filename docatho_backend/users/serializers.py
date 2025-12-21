@@ -1,5 +1,4 @@
 from rest_framework import serializers
-
 from docatho_backend.users.models import User
 
 

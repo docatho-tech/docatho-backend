@@ -43,6 +43,12 @@ class CartViewSet(viewsets.ViewSet):
         serializer = CartSerializer(cart, context={"request": request})
         return Response(serializer.data)
 
+    # api for cart items count
+    @action(detail=False, methods=["get"])
+    def get_cart_items_count(self, request):
+        cart = self._get_open_cart(request.user)
+        return Response({"count": cart.items.count()})
+
     @action(detail=False, methods=["post"])
     def add(self, request):
         medicine_id = request.data.get("medicine_id")
