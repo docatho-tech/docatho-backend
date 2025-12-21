@@ -3,6 +3,7 @@ from docatho_backend.medicines.models import Medicine
 from rest_framework import serializers
 from decimal import Decimal
 
+
 class MedicineLiteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Medicine
@@ -39,6 +40,8 @@ class CartItemSerializer(serializers.ModelSerializer):
 class CartSerializer(serializers.ModelSerializer):
     items = CartItemSerializer(many=True, read_only=True)
     user_name = serializers.CharField(source="user.name", read_only=True)
+    address = serializers.SerializerMethodField(required=False)
+
     class Meta:
         model = Cart
         fields = (
@@ -52,6 +55,21 @@ class CartSerializer(serializers.ModelSerializer):
             "discount_type",
             "total",
             "items",
-            
         )
         read_only_fields = ("total_mrp", "subtotal", "total", "items")
+
+    def get_address(self, obj):
+        address = obj.user.addresses.all()
+        print(address)
+        if address.first():
+            return {
+                "id": address.first().id,
+                "address_line1": address.first().address_line1,
+                "address_line2": address.first().address_line2,
+                "landmark": address.first().landmark,
+                "city": address.first().city,
+                "postal_code": address.first().postal_code,
+                "state": address.first().state,
+                "country": address.first().country,
+            }
+        return None
