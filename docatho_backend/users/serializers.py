@@ -35,4 +35,4 @@ class VerifyOtpSerializer(SendOtpSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "name", "email", "phone"]
+        fields = ["id", "name", "email", "phone", "dob"]
