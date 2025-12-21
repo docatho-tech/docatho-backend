@@ -14,7 +14,11 @@ from rest_framework import status
 from rest_framework.views import APIView
 from docatho_backend.users.helper import generate_otp
 from docatho_backend.users.models import PhoneOtp, User, Address
-from docatho_backend.users.serializers import SendOtpSerializer, VerifyOtpSerializer
+from docatho_backend.users.serializers import (
+    SendOtpSerializer,
+    UserProfileSerializer,
+    VerifyOtpSerializer,
+)
 from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
@@ -364,3 +368,12 @@ class DashboardView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class UserProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        serializer = UserProfileSerializer(user)
+        return Response(serializer.data, status=status.HTTP_200_OK)

@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from docatho_backend.users.models import User
+
 
 class SendOtpSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=32)
@@ -28,3 +30,9 @@ class VerifyOtpSerializer(SendOtpSerializer):
         if not otp.isdigit():
             raise serializers.ValidationError("OTP must contain digits only")
         return otp
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "name", "email", "phone"]

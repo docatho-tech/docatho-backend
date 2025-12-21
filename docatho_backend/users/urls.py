@@ -4,7 +4,7 @@ from .views import RegisterView, user_detail_view
 from .views import user_redirect_view
 from .views import user_update_view
 from docatho_backend.users.views import SendOTPApiView, VerifyOtpAPIView, RegisterView
-from .views import UpdateProfileAPIView, AdminLoginView, CreateAddressAPIView, UpdateAddressAPIView, DashboardView
+from .views import UpdateProfileAPIView, AdminLoginView, CreateAddressAPIView, UpdateAddressAPIView, DashboardView, UserProfileView
 
 app_name = "users"
 urlpatterns = [
@@ -19,4 +19,5 @@ urlpatterns = [
     path("addresses/<int:pk>/", UpdateAddressAPIView.as_view(), name="update-address"),
     path("admin-login/", AdminLoginView.as_view(), name="admin-login"),
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
+    path("profile/", UserProfileView.as_view(), name="profile"),
 ]
