@@ -133,7 +133,7 @@ class VerifyOtpAPIView(APIView):
                 if is_otp_correct:
                     return Response(
                         {"detail": "OTP verified", "registered": False},
-                        status=status.HTTP_400_BAD_REQUEST,
+                        status=status.HTTP_200_OK,
                     )
                 return Response({"detail": "OTP verified"}, status=status.HTTP_200_OK)
         except PhoneOtp.DoesNotExist:
@@ -338,3 +338,29 @@ class UpdateAddressAPIView(APIView):
             pass
         out = AddressSerializer(addr, context={"request": request}).data
         return Response(out, status=status.HTTP_200_OK)
+
+
+class DashboardView(APIView):
+    def get(self, request):
+        marketing_urls = [
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/Frame+1000003879.png"
+        ]
+        categories = [
+            {
+                "id": 1,
+                "name": "Medicines",
+                "image_url": "https://docatho-media.s3.ap-south-1.amazonaws.com/tablet.png",
+            },
+            {
+                "id": 2,
+                "name": "Supplements",
+                "image_url": "https://docatho-media.s3.ap-south-1.amazonaws.com/supplements_category.png",
+            },
+        ]
+        return Response(
+            {
+                "marketing_urls": marketing_urls,
+                "categories": categories,
+            },
+            status=status.HTTP_200_OK,
+        )

@@ -1,8 +1,5 @@
-from os import name
-from django.db import models
-from django.utils.text import slugify
 from decimal import Decimal
-
+from django.db import models
 from docatho_backend.masters.models import BaseModel
 
 
