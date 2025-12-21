@@ -354,7 +354,7 @@ class DashboardView(APIView):
             {
                 "id": 2,
                 "name": "Supplements",
-                "image_url": "https://docatho-media.s3.ap-south-1.amazonaws.com/supplements_category.png",
+                "image_url": "https://docatho-media.s3.ap-south-1.amazonaws.com/capsule.png",
             },
         ]
         return Response(
