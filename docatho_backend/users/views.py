@@ -225,7 +225,7 @@ class RegisterView(APIView):
             user.save()
 
             return Response(
-                {"detail": {"token": Token.objects.get_or_create(user=user)[0].key}},
+                {"token": Token.objects.get_or_create(user=user)[0].key},
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
