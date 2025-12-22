@@ -19,6 +19,8 @@ from docatho_backend.users.serializers import (
     UserProfileSerializer,
     VerifyOtpSerializer,
 )
+from docatho_backend.medicines.models import Category
+from docatho_backend.medicines.serializers import CategorySerializer
 from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
@@ -349,18 +351,8 @@ class DashboardView(APIView):
         marketing_urls = [
             "https://docatho-media.s3.ap-south-1.amazonaws.com/Frame+1000003879.png"
         ]
-        categories = [
-            {
-                "id": 1,
-                "name": "Medicines",
-                "image_url": "https://docatho-media.s3.ap-south-1.amazonaws.com/tablet.png",
-            },
-            {
-                "id": 2,
-                "name": "Supplements",
-                "image_url": "https://docatho-media.s3.ap-south-1.amazonaws.com/capsule.png",
-            },
-        ]
+        categories_qs = Category.objects.filter(is_active=True)
+        categories = CategorySerializer(categories_qs, many=True).data
         return Response(
             {
                 "marketing_urls": marketing_urls,
