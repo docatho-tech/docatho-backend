@@ -352,7 +352,9 @@ class UpdateAddressAPIView(APIView):
 class DashboardView(APIView):
     def get(self, request):
         marketing_urls = [
-            "https://docatho-media.s3.ap-south-1.amazonaws.com/Frame+1000003879.png"
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad1.png"
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad2.png"
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad3.png"
         ]
         categories_qs = Category.objects.filter(is_active=True)
         categories = CategorySerializer(categories_qs, many=True).data
