@@ -103,6 +103,42 @@ class RazorpayConfirmSerializer(serializers.Serializer):
     razorpay_signature = serializers.CharField()
 
 
+class UpdateOrderStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=Order.Status.choices)
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class TransactionSerializer(serializers.ModelSerializer):
+    order_number = serializers.CharField(source="order.order_number", read_only=True)
+    order_id = serializers.IntegerField(source="order.id", read_only=True)
+    user_name = serializers.CharField(source="order.user.name", read_only=True)
+    user_phone = serializers.CharField(source="order.user.phone", read_only=True)
+
+    class Meta:
+        model = Transaction
+        fields = (
+            "id",
+            "order_id",
+            "order_number",
+            "user_name",
+            "user_phone",
+            "provider",
+            "payment_method",
+            "transaction_order_id",
+            "razorpay_payment_id",
+            "amount",
+            "succeeded",
+            "paid_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "created_at",
+            "updated_at",
+        )
+
+
 class OrderViewSet(viewsets.ViewSet):
     permission_classes = (IsAuthenticated,)
 
@@ -116,6 +152,28 @@ class OrderViewSet(viewsets.ViewSet):
         order = get_object_or_404(Order, pk=pk, user=request.user)
         serializer = OrderSerializer(order, context={"request": request})
         return Response(serializer.data)
+
+    @action(detail=True, methods=["patch"], url_path="update-status")
+    def update_status(self, request, pk=None):
+        """
+        Update the status of an order.
+        PATCH /api/orders/<pk>/update-status/  { status, notes (optional) }
+        """
+        order = get_object_or_404(Order, pk=pk, user=request.user)
+        serializer = UpdateOrderStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            order.update_status(
+                new_status=serializer.validated_data["status"],
+                notes=serializer.validated_data.get("notes"),
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Return updated order
+        response_serializer = OrderSerializer(order, context={"request": request})
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"])
     def checkout(self, request):
@@ -295,3 +353,91 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
                 self.request, message="User does not have admin privileges."
             )
         return permissions
+
+    @action(detail=True, methods=["patch"], url_path="update-status")
+    def update_status(self, request, pk=None):
+        """
+        Update the status of an order (admin only).
+        PATCH /api/admin/orders/<pk>/update-status/  { status, notes (optional) }
+        """
+        order = get_object_or_404(Order, pk=pk)
+        serializer = UpdateOrderStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            order.update_status(
+                new_status=serializer.validated_data["status"],
+                notes=serializer.validated_data.get("notes"),
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Return updated order
+        response_serializer = AdminOrderSerializer(order, context={"request": request})
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+class TransactionSerializer(serializers.ModelSerializer):
+    order_number = serializers.CharField(source="order.order_number", read_only=True)
+    order_id = serializers.IntegerField(source="order.id", read_only=True)
+    user_name = serializers.CharField(source="order.user.name", read_only=True)
+    user_phone = serializers.CharField(source="order.user.phone", read_only=True)
+
+    class Meta:
+        model = Transaction
+        fields = (
+            "id",
+            "order_id",
+            "order_number",
+            "user_name",
+            "user_phone",
+            "provider",
+            "payment_method",
+            "transaction_order_id",
+            "razorpay_payment_id",
+            "amount",
+            "succeeded",
+            "paid_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "created_at",
+            "updated_at",
+        )
+
+
+class TransactionListView(viewsets.ReadOnlyModelViewSet):
+    """
+    Viewset for listing transactions with pagination (10 per page).
+    GET /api/transactions/ - list all transactions
+    - Regular users: only their own transactions
+    - Admin users: all transactions
+    """
+
+    permission_classes = (IsAuthenticated,)
+    pagination_class = GenericPagination
+    serializer_class = TransactionSerializer
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter)
+    filterset_fields = ["succeeded", "provider", "payment_method"]
+    search_fields = [
+        "razorpay_payment_id",
+        "transaction_order_id",
+        "order__order_number",
+    ]
+    queryset = Transaction.objects.all().order_by("-paid_at", "-created_at")
+
+    def get_queryset(self):
+        """
+        Filter transactions based on user permissions.
+        - Regular users can only see transactions for their own orders
+        - Admin users can see all transactions
+        """
+        queryset = super().get_queryset()
+
+        # If user is not staff, filter to only their orders' transactions
+        if not self.request.user.is_staff:
+            queryset = queryset.filter(order__user=self.request.user)
+
+        return queryset

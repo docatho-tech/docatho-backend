@@ -1,11 +1,12 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .views import OrderViewSet, razorpay_webhook, AdminOrderList
+from .views import OrderViewSet, razorpay_webhook, AdminOrderList, TransactionListView
 
 router = DefaultRouter()
 router.register(r"orders", OrderViewSet, basename="orders")
 router.register(r"admin/orders", AdminOrderList, basename="admin-orders")
+router.register(r"transactions", TransactionListView, basename="transactions")
 
 urlpatterns = [
     path("", include(router.urls)),

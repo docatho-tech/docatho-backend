@@ -104,6 +104,60 @@ class Order(BaseModel):
             ]
         )
 
+    @transaction.atomic
+    def update_status(self, new_status: str, notes: Optional[str] = None) -> None:
+        """
+        Update the order status with validation and automatic field updates.
+
+        Args:
+            new_status: The new status value (must be a valid Status choice)
+            notes: Optional notes to add to the order
+
+        Raises:
+            ValueError: If the new_status is not a valid Status choice
+        """
+        # Validate status
+        valid_statuses = [choice[0] for choice in self.Status.choices]
+        if new_status not in valid_statuses:
+            raise ValueError(
+                f"Invalid status '{new_status}'. Must be one of: {', '.join(valid_statuses)}"
+            )
+
+        old_status = self.status
+        self.status = new_status
+
+        # Auto-update delivered_at when status changes to DELIVERED
+        if new_status == self.Status.DELIVERED and not self.delivered_at:
+            self.delivered_at = timezone.now()
+
+        # Update notes if provided
+        if notes:
+            existing_notes = self.notes or ""
+            if existing_notes:
+                self.notes = f"{existing_notes}\n\n{notes}"
+            else:
+                self.notes = notes
+
+        # Save the order
+        update_fields = ["status", "updated_at"]
+        if new_status == self.Status.DELIVERED and self.delivered_at:
+            update_fields.append("delivered_at")
+        if notes:
+            update_fields.append("notes")
+
+        self.save(update_fields=update_fields)
+
+        # Create a log entry for status change
+        try:
+            OrderLog.objects.create(
+                order=self,
+                message=f"Status changed from {old_status} to {new_status}",
+                meta={"old_status": old_status, "new_status": new_status},
+            )
+        except Exception:
+            # Don't fail if logging fails
+            pass
+
 
 class OrderItem(BaseModel):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")

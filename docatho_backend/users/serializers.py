@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from docatho_backend.users.models import User
+from docatho_backend.users.models import User, Address
 
 
 class SendOtpSerializer(serializers.Serializer):
@@ -35,3 +35,74 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "name", "email", "phone", "dob"]
+
+
+class UserListSerializer(serializers.ModelSerializer):
+    """Serializer for listing all users with basic information."""
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "phone",
+            "dob",
+            "is_active",
+            "is_staff",
+            "date_joined",
+        ]
+        read_only_fields = ["id", "date_joined"]
+
+
+class AddressDetailSerializer(serializers.ModelSerializer):
+    """Serializer for address details in user detail view."""
+
+    class Meta:
+        model = Address
+        fields = (
+            "id",
+            "address_line1",
+            "address_line2",
+            "landmark",
+            "city",
+            "state",
+            "postal_code",
+            "country",
+        )
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Serializer for user detail view with address and orders."""
+
+    address = serializers.SerializerMethodField()
+    orders = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "phone",
+            "dob",
+            "is_active",
+            "date_joined",
+            "address",
+            "orders",
+        ]
+        read_only_fields = ["id", "date_joined"]
+
+    def get_address(self, obj):
+        """Get the first address for the user."""
+        address = obj.addresses.first()
+        if address:
+            return AddressDetailSerializer(address).data
+        return None
+
+    def get_orders(self, obj):
+        """Get all orders for the user using OrderSerializer."""
+        from docatho_backend.orders.views import OrderSerializer
+
+        orders = obj.orders.all().order_by("-placed_at")
+        return OrderSerializer(orders, many=True, context=self.context).data

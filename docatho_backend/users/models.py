@@ -28,6 +28,7 @@ class User(AbstractUser):
     username = None  # type: ignore[assignment]
     phone = PhoneNumberField(_("Phone Number"), blank=True)
     dob = models.DateField(_("Date of Birth"), blank=True, null=True)
+    # profile_picture = models.URLField(_("Profile Picture"), blank=True, null=True)
 
     USERNAME_FIELD = "phone"
     REQUIRED_FIELDS = []

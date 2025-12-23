@@ -17,10 +17,13 @@ from docatho_backend.users.models import PhoneOtp, User, Address
 from docatho_backend.users.serializers import (
     SendOtpSerializer,
     UserProfileSerializer,
+    UserListSerializer,
+    UserDetailSerializer,
     VerifyOtpSerializer,
 )
 from docatho_backend.medicines.models import Category
 from docatho_backend.medicines.serializers import CategorySerializer
+from docatho_backend.orders.paginators import GenericPagination
 from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
@@ -368,4 +371,59 @@ class UserProfileView(APIView):
     def get(self, request):
         user = request.user
         serializer = UserProfileSerializer(user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ListUsersAPIView(APIView):
+    """
+    GET /api/users/list/ - list all users in the database
+    Requires authentication. Admin users can see all users.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = GenericPagination
+
+    def get(self, request):
+        # Optionally restrict to admin users only
+        # Uncomment the following lines if you want admin-only access
+        # if not request.user.is_staff:
+        #     return Response(
+        #         {"detail": "You do not have permission to perform this action."},
+        #         status=status.HTTP_403_FORBIDDEN,
+        #     )
+
+        users = User.objects.all().order_by("-date_joined")
+
+        # Apply pagination
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(users, request)
+
+        if page is not None:
+            serializer = UserListSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        # If no pagination, return all users
+        serializer = UserListSerializer(users, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class UserDetailAPIView(APIView):
+    """
+    GET /api/users/<pk>/detail/ - get detailed user information
+    Returns user info, address, and all orders with complete order details.
+    Requires authentication. Users can view their own details, admins can view any user.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk):
+        user = get_object_or_404(User, pk=pk)
+        # Non-admin users can only view their own details
+        if not request.user.is_staff and user != request.user:
+            return Response(
+                {"detail": "You do not have permission to view this user's details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = UserDetailSerializer(user, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
