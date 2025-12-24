@@ -24,9 +24,9 @@ class User(AbstractUser):
     name = CharField(_("Name of User"), blank=True, max_length=255)
     first_name = None  # type: ignore[assignment]
     last_name = None  # type: ignore[assignment]
-    email = EmailField(_("email address"), unique=True)
+    email = EmailField(_("email address"), blank=True, null=True, unique=True)
     username = None  # type: ignore[assignment]
-    phone = PhoneNumberField(_("Phone Number"), blank=True)
+    phone = PhoneNumberField(_("Phone Number"), blank=False)
     dob = models.DateField(_("Date of Birth"), blank=True, null=True)
     # profile_picture = models.URLField(_("Profile Picture"), blank=True, null=True)
 

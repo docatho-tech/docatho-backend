@@ -10,7 +10,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
-from docatho_backend.orders.paginators import GenericPagination
+from docatho_backend.orders.paginators import GenericPaginationClass
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from .models import Order, OrderItem, Transaction
@@ -55,8 +55,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "discount_amount",
             "total",
             "placed_at",
-            "estimated_delivery_start",
-            "estimated_delivery_end",
+            "estimated_delivery_mins",
             "items",
         )
 
@@ -84,8 +83,8 @@ class AdminOrderSerializer(serializers.ModelSerializer):
             "discount_amount",
             "total",
             "placed_at",
-            "estimated_delivery_start",
-            "estimated_delivery_end",
+            "estimated_delivery_mins",
+            "delivered_at",
             "items",
         )
 
@@ -339,7 +338,7 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
     """
 
     permission_classes = (IsAuthenticated,)
-    pagination_class = GenericPagination
+    pagination_class = GenericPaginationClass
     serializer_class = AdminOrderSerializer
     filter_backends = (DjangoFilterBackend, filters.SearchFilter)
     filterset_fields = ["status", "payment_status"]
@@ -417,7 +416,7 @@ class TransactionListView(viewsets.ReadOnlyModelViewSet):
     """
 
     permission_classes = (IsAuthenticated,)
-    pagination_class = GenericPagination
+    pagination_class = GenericPaginationClass
     serializer_class = TransactionSerializer
     filter_backends = (DjangoFilterBackend, filters.SearchFilter)
     filterset_fields = ["succeeded", "provider", "payment_method"]

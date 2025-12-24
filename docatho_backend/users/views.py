@@ -23,7 +23,7 @@ from docatho_backend.users.serializers import (
 )
 from docatho_backend.medicines.models import Category
 from docatho_backend.medicines.serializers import CategorySerializer
-from docatho_backend.orders.paginators import GenericPagination
+from docatho_backend.orders.paginators import GenericPaginationClass
 from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
@@ -383,7 +383,7 @@ class ListUsersAPIView(APIView):
     """
 
     permission_classes = [permissions.IsAuthenticated]
-    pagination_class = GenericPagination
+    pagination_class = GenericPaginationClass
 
     def get(self, request):
         # Optionally restrict to admin users only

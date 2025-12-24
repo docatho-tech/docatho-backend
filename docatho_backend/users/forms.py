@@ -3,6 +3,7 @@ from allauth.socialaccount.forms import SignupForm as SocialSignupForm
 from django.contrib.auth import forms as admin_forms
 from django.forms import EmailField
 from django.utils.translation import gettext_lazy as _
+from phonenumber_field.formfields import PhoneNumberField as PhoneNumberFormField
 
 from .models import User
 
@@ -10,7 +11,19 @@ from .models import User
 class UserAdminChangeForm(admin_forms.UserChangeForm):
     class Meta(admin_forms.UserChangeForm.Meta):  # type: ignore[name-defined]
         model = User
-        field_classes = {"email": EmailField}
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Override phone field with form field to avoid auto-generation issues
+        from phonenumber_field.formfields import (
+            PhoneNumberField as PhoneNumberFormField,
+        )
+
+        self.fields["phone"] = PhoneNumberFormField(required=True)
+        # Make email optional
+        if "email" in self.fields:
+            self.fields["email"].required = False
 
 
 class UserAdminCreationForm(admin_forms.AdminUserCreationForm):
@@ -21,11 +34,17 @@ class UserAdminCreationForm(admin_forms.AdminUserCreationForm):
 
     class Meta(admin_forms.UserCreationForm.Meta):  # type: ignore[name-defined]
         model = User
-        fields = ("email",)
-        field_classes = {"email": EmailField}
+        fields = ()  # Exclude all auto-generated fields
         error_messages = {
-            "email": {"unique": _("This email has already been taken.")},
+            "phone": {"unique": _("This phone has already been taken.")},
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Add phone field explicitly to avoid auto-generation issues
+        self.fields["phone"] = PhoneNumberFormField(required=True)
+        # Add email field as optional
+        self.fields["email"] = EmailField(required=False)
 
 
 class UserSignupForm(SignupForm):

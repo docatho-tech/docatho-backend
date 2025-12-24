@@ -61,8 +61,7 @@ class Order(BaseModel):
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
 
-    estimated_delivery_start = models.DateTimeField(null=True, blank=True)
-    estimated_delivery_end = models.DateTimeField(null=True, blank=True)
+    estimated_delivery_mins = models.IntegerField(default=0)
     placed_at = models.DateTimeField(default=timezone.now)
     delivered_at = models.DateTimeField(null=True, blank=True)
 
