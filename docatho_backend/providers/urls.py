@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     SendOTPAPIView,
+    UserDetailAPIView,
     VerifyOTPAPIView,
     ChemistOrderListAPIView,
     ChemistOrderUpdateAPIView,
@@ -21,4 +22,5 @@ urlpatterns = [
         ChemistOrderUpdateAPIView.as_view(),
         name="chemist-order-update",
     ),
+    path("user-detail/", UserDetailAPIView.as_view(), name="user-detail"),
 ]
