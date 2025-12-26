@@ -116,3 +116,17 @@ class UserDetailAPIView(APIView):
         user = request.user
         serializer = UserSerializer(user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class OrderDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = OrderSerializer
+    queryset = Order.objects.all()
+
+    def get_object(self, pk):
+        return Order.objects.get(pk=pk)
+
+    def get(self, request, pk):
+        order = self.get_object(pk=pk)
+        serializer = OrderSerializer(order)
+        return Response(serializer.data, status=status.HTTP_200_OK)

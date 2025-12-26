@@ -6,6 +6,7 @@ from .views import (
     VerifyOTPAPIView,
     ChemistOrderListAPIView,
     ChemistOrderUpdateAPIView,
+    OrderDetailAPIView,
 )
 
 app_name = "providers"
@@ -22,5 +23,10 @@ urlpatterns = [
         "chemist-order-update/<int:pk>/",
         ChemistOrderUpdateAPIView.as_view(),
         name="chemist-order-update",
+    ),
+    path(
+        "order-detail/<int:pk>/",
+        OrderDetailAPIView.as_view(),
+        name="order-detail",
     ),
 ]
