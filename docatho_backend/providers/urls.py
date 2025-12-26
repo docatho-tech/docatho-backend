@@ -10,6 +10,7 @@ from .views import (
 
 app_name = "providers"
 urlpatterns = [
+    path("user-detail/", UserDetailAPIView.as_view(), name="user-detail"),
     path("send-otp/", SendOTPAPIView.as_view(), name="send-otp"),
     path("verify-otp/", VerifyOTPAPIView.as_view(), name="verify-otp"),
     path(
@@ -22,5 +23,4 @@ urlpatterns = [
         ChemistOrderUpdateAPIView.as_view(),
         name="chemist-order-update",
     ),
-    path("user-detail/", UserDetailAPIView.as_view(), name="user-detail"),
 ]
