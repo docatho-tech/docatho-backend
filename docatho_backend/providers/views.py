@@ -97,7 +97,8 @@ class SendOTPAPIView(APIView):
             User.objects.get(phone=phone)
         except User.DoesNotExist:
             return Response(
-                {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND,
+                {"detail": "User not found"},
+                status=status.HTTP_404_NOT_FOUND,
             )
         otp_value = generate_otp()
         otp_obj, _ = PhoneOtp.objects.get_or_create(
@@ -120,14 +121,16 @@ class VerifyOTPAPIView(APIView):
             otp_obj = PhoneOtp.objects.get(phone_number=phone)
         except PhoneOtp.DoesNotExist:
             return Response(
-                {"detail": "OTP not found"}, status=status.HTTP_404_NOT_FOUND,
+                {"detail": "OTP not found"},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         try:
             user = User.objects.get(phone=phone)
         except User.DoesNotExist:
             return Response(
-                {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND,
+                {"detail": "User not found"},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         if otp_obj.otp == otp:
@@ -154,10 +157,7 @@ class ChemistOrderListAPIView(ListAPIView):
         if getattr(self, "swagger_fake_view", False):
             return Order.objects.none()
         provider = _provider_for(self.request.user)
-        return (
-            Order.objects.filter(assigned_provider=provider)
-            .order_by("-placed_at")
-        )
+        return Order.objects.filter(assigned_provider=provider).order_by("-placed_at")
 
 
 class ChemistOrderUpdateAPIView(APIView):
@@ -242,7 +242,8 @@ class UserDetailAPIView(APIView):
 
     def get(self, request):
         return Response(
-            UserSerializer(request.user).data, status=status.HTTP_200_OK,
+            UserSerializer(request.user).data,
+            status=status.HTTP_200_OK,
         )
 
 

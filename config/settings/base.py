@@ -1,10 +1,8 @@
 # ruff: noqa: ERA001, E501
 """Base settings to build other settings files upon."""
 
-
-from pathlib import Path
-from decouple import config
 import environ
+from decouple import config
 
 # Set up root and apps directory using environ
 ROOT_DIR = environ.Path(__file__) - 3
@@ -34,7 +32,8 @@ PHARMACY_COMMISSION_PERCENT = env.float("PHARMACY_COMMISSION_PERCENT", default=1
 PHARMACY_DELIVERY_FEE = env.float("PHARMACY_DELIVERY_FEE", default=0.0)
 # Promotional discount applied to every order's subtotal, as a percentage.
 PHARMACY_ORDER_DISCOUNT_PERCENT = env.float(
-    "PHARMACY_ORDER_DISCOUNT_PERCENT", default=15.0
+    "PHARMACY_ORDER_DISCOUNT_PERCENT",
+    default=15.0,
 )
 # Delivery backend for notifications; swapped to a Firebase adapter in S5.
 NOTIFICATION_BACKEND = env(

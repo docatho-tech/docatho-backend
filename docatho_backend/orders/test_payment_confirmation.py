@@ -44,7 +44,12 @@ def _online_order_awaiting_payment(user, *, stock=10, qty=2, rp_order_id="order_
         payment_method=Order.PaymentMethod.ONLINE,
         payment_status=Order.PaymentStatus.PENDING,
     )
-    OrderItemFactory(order=order, medicine=med, quantity=qty, unit_price=Decimal("100.00"))
+    OrderItemFactory(
+        order=order,
+        medicine=med,
+        quantity=qty,
+        unit_price=Decimal("100.00"),
+    )
     order.recalc_totals()
     tr = Transaction.objects.create(
         order=order,
@@ -94,7 +99,8 @@ def test_confirm_payment_marks_paid_reserves_stock_and_clears_cart(auth_client):
     assert med.stock == 8  # 10 - 2 reserved on confirmation
     assert Cart.objects.get(user=user).items.count() == 0
     assert user.notifications.filter(
-        notification_type=NotificationType.PAYMENT, order=order,
+        notification_type=NotificationType.PAYMENT,
+        order=order,
     ).exists()
 
 
@@ -178,7 +184,9 @@ def test_confirm_payment_missing_fields_returns_400(auth_client, payload):
     user = UserFactory()
     _online_order_awaiting_payment(user)
     resp = auth_client(user).post(
-        "/api/orders/confirm-payment/", payload, format="json",
+        "/api/orders/confirm-payment/",
+        payload,
+        format="json",
     )
     assert resp.status_code == 400
 

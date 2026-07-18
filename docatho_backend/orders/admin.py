@@ -51,7 +51,11 @@ class PrescriptionAdmin(admin.ModelAdmin):
 class TransactionAdmin(admin.ModelAdmin):
     list_display = ("id", "order", "amount", "succeeded", "paid_at")
     list_filter = ("succeeded", "provider")
-    search_fields = ("order__order_number", "razorpay_payment_id", "transaction_order_id")
+    search_fields = (
+        "order__order_number",
+        "razorpay_payment_id",
+        "transaction_order_id",
+    )
 
 
 @admin.register(Invoice)

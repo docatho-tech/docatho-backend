@@ -1,4 +1,3 @@
-
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework import viewsets
@@ -90,7 +89,8 @@ class CartViewSet(viewsets.ViewSet):
         item = cart.update_item_quantity(medicine, quantity)
         if item is None:
             return Response(
-                {"detail": "item not found in cart"}, status=status.HTTP_404_NOT_FOUND,
+                {"detail": "item not found in cart"},
+                status=status.HTTP_404_NOT_FOUND,
             )
         serializer = CartSerializer(cart, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)

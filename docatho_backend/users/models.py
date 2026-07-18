@@ -1,15 +1,15 @@
 from typing import ClassVar
 
 from django.contrib.auth.models import AbstractUser
+from django.db import models
 from django.db.models import CharField
 from django.db.models import EmailField
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-
 from phonenumber_field.modelfields import PhoneNumberField
 
 from docatho_backend.masters.models import BaseModel
-from django.db import models
+
 from .managers import UserManager
 
 
@@ -38,9 +38,7 @@ class User(AbstractUser):
     @property
     def address(self):
         """Preferred delivery address: the default one, else the most recent."""
-        return (
-            self.addresses.filter(is_default=True).first() or self.addresses.first()
-        )
+        return self.addresses.filter(is_default=True).first() or self.addresses.first()
 
     def __str__(self) -> str:
         """Return a plain string for the user suitable for display in admin and logs.

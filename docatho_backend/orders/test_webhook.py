@@ -81,7 +81,8 @@ def _order_with_txn(rp_order_id="order_WH"):
 def test_webhook_payment_captured_marks_order_paid(api_client):
     order, tr = _order_with_txn("order_CAP")
     resp = _post_webhook(
-        api_client, _payment_payload("payment.captured", rp_order_id="order_CAP"),
+        api_client,
+        _payment_payload("payment.captured", rp_order_id="order_CAP"),
     )
     assert resp.status_code == 200, resp.data
     assert resp.data["event"] == "payment.captured"
@@ -98,7 +99,8 @@ def test_webhook_payment_captured_marks_order_paid(api_client):
 def test_webhook_payment_failed_marks_order_failed(api_client):
     order, tr = _order_with_txn("order_FAIL")
     resp = _post_webhook(
-        api_client, _payment_payload("payment.failed", rp_order_id="order_FAIL"),
+        api_client,
+        _payment_payload("payment.failed", rp_order_id="order_FAIL"),
     )
     assert resp.status_code == 200, resp.data
 
@@ -112,7 +114,8 @@ def test_webhook_authorized_event_does_not_mark_paid(api_client):
     """payment.authorized is acknowledged but must not settle the order."""
     order, tr = _order_with_txn("order_AUTH")
     resp = _post_webhook(
-        api_client, _payment_payload("payment.authorized", rp_order_id="order_AUTH"),
+        api_client,
+        _payment_payload("payment.authorized", rp_order_id="order_AUTH"),
     )
     assert resp.status_code == 200
     order.refresh_from_db()
@@ -167,7 +170,8 @@ def test_webhook_signature_from_wrong_secret_is_rejected(api_client):
 def test_webhook_without_configured_secret_returns_400(api_client, settings):
     settings.RAZORPAY_WEBHOOK_SECRET = ""
     resp = _post_webhook(
-        api_client, _payment_payload("payment.captured", rp_order_id="order_X"),
+        api_client,
+        _payment_payload("payment.captured", rp_order_id="order_X"),
     )
     assert resp.status_code == 400
 
@@ -176,6 +180,7 @@ def test_webhook_is_public_no_auth_required(api_client):
     """An unauthenticated request must reach the handler (fails on signature, not auth)."""
     _order_with_txn("order_PUB")
     resp = _post_webhook(
-        api_client, _payment_payload("payment.captured", rp_order_id="order_PUB"),
+        api_client,
+        _payment_payload("payment.captured", rp_order_id="order_PUB"),
     )
     assert resp.status_code == 200

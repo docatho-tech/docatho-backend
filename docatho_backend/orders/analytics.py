@@ -34,7 +34,8 @@ ZERO = Value(0, output_field=DEC)
 #  - online orders: payment captured (payment_status = paid)
 #  - COD orders: cash collected at delivery (status = delivered)
 REVENUE_Q = Q(payment_status=Order.PaymentStatus.PAID) | Q(
-    payment_method=Order.PaymentMethod.COD, status=Order.Status.DELIVERED,
+    payment_method=Order.PaymentMethod.COD,
+    status=Order.Status.DELIVERED,
 )
 
 _TRUNC = {"day": TruncDate, "week": TruncWeek, "month": TruncMonth}
@@ -151,7 +152,8 @@ class SalesAnalyticsView(APIView):
             .annotate(
                 quantity_sold=Coalesce(Sum("quantity"), Value(0)),
                 revenue=Coalesce(
-                    Sum(F("quantity") * F("unit_price"), output_field=DEC), ZERO,
+                    Sum(F("quantity") * F("unit_price"), output_field=DEC),
+                    ZERO,
                 ),
             )
             .order_by("-quantity_sold")[:10],
@@ -162,7 +164,8 @@ class SalesAnalyticsView(APIView):
             .annotate(
                 quantity_sold=Coalesce(Sum("quantity"), Value(0)),
                 revenue=Coalesce(
-                    Sum(F("quantity") * F("unit_price"), output_field=DEC), ZERO,
+                    Sum(F("quantity") * F("unit_price"), output_field=DEC),
+                    ZERO,
                 ),
             )
             .exclude(medicine__category__isnull=True)

@@ -29,7 +29,12 @@ class UserManager(DjangoUserManager["User"]):
         extra_fields.setdefault("is_superuser", False)
         return self._create_user(phone, password, **extra_fields)
 
-    def create_superuser(self, phone: str | None = None, password: str | None = None, **extra_fields):  # type: ignore[override]
+    def create_superuser(
+        self,
+        phone: str | None = None,
+        password: str | None = None,
+        **extra_fields,
+    ):  # type: ignore[override]
         """Create and return a superuser. Accepts phone as primary identifier.
 
         This signature tolerates additional kwargs (for example `email`) that the

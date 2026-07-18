@@ -10,9 +10,10 @@ from docatho_backend.medicines.models import Medicine
 
 
 class Cart(BaseModel):
-
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="carts",
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="carts",
     )
 
     # Address model assumed at users.Address; change the string if different.
@@ -25,16 +26,24 @@ class Cart(BaseModel):
     )
 
     total_mrp = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     discount_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     total = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
 
     # discount_type: 'fixed' applies absolute amount, 'percent' applies percent to subtotal
@@ -42,7 +51,9 @@ class Cart(BaseModel):
     DISCOUNT_PERCENT = "percent"
     DISCOUNT_CHOICES = ((DISCOUNT_FIXED, "Fixed"), (DISCOUNT_PERCENT, "Percent"))
     discount_type = models.CharField(
-        max_length=16, choices=DISCOUNT_CHOICES, default=DISCOUNT_FIXED,
+        max_length=16,
+        choices=DISCOUNT_CHOICES,
+        default=DISCOUNT_FIXED,
     )
 
     notes = models.TextField(blank=True, null=True)
@@ -64,7 +75,9 @@ class Cart(BaseModel):
                 "quantity": quantity,
                 "unit_price": getattr(medicine, "price", Decimal("0.00")),
                 "mrp": getattr(
-                    medicine, "mrp", getattr(medicine, "price", Decimal("0.00")),
+                    medicine,
+                    "mrp",
+                    getattr(medicine, "price", Decimal("0.00")),
                 ),
             },
         )
@@ -81,7 +94,9 @@ class Cart(BaseModel):
 
     @transaction.atomic
     def update_item_quantity(
-        self, medicine: Medicine, quantity: int,
+        self,
+        medicine: Medicine,
+        quantity: int,
     ) -> Optional["CartItem"]:
         try:
             item = CartItem.objects.get(cart=self, medicine=medicine)
@@ -147,13 +162,17 @@ class Cart(BaseModel):
 class CartItem(BaseModel):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
     medicine = models.ForeignKey(
-        Medicine, on_delete=models.PROTECT, related_name="cart_items",
+        Medicine,
+        on_delete=models.PROTECT,
+        related_name="cart_items",
     )
 
     quantity = models.PositiveIntegerField(default=1)
     # snapshot prices so changes in product don't affect historical cart rows
     unit_price = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     mrp = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 

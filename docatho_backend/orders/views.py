@@ -66,7 +66,9 @@ class OrderSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source="user.name", read_only=True)
     user_phone = serializers.CharField(source="user.phone", read_only=True)
     provider_name = serializers.CharField(
-        source="assigned_provider.name", read_only=True, default=None,
+        source="assigned_provider.name",
+        read_only=True,
+        default=None,
     )
 
     class Meta:
@@ -242,7 +244,8 @@ class OrderViewSet(viewsets.ViewSet):
         cart = Cart.objects.filter(user=request.user).first()
         if not cart or not cart.items.exists():
             return Response(
-                {"detail": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Cart is empty"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         cart_items = list(cart.items.select_related("medicine").all())
@@ -264,7 +267,8 @@ class OrderViewSet(viewsets.ViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             prescription = Prescription.objects.filter(
-                pk=prescription_id, user=request.user,
+                pk=prescription_id,
+                user=request.user,
             ).first()
             if prescription is None:
                 return Response(
@@ -274,9 +278,7 @@ class OrderViewSet(viewsets.ViewSet):
 
         # --- Stock availability (soft check before creating the order) ---- #
         shortages = [
-            ci.medicine.name
-            for ci in cart_items
-            if ci.medicine.stock < ci.quantity
+            ci.medicine.name for ci in cart_items if ci.medicine.stock < ci.quantity
         ]
         if shortages:
             return Response(
@@ -339,7 +341,8 @@ class OrderViewSet(viewsets.ViewSet):
                     order.reserve_stock()
                 except ValueError as exc:
                     return Response(
-                        {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST,
+                        {"detail": str(exc)},
+                        status=status.HTTP_400_BAD_REQUEST,
                     )
                 cart.clear()
                 rp_order = None
@@ -351,7 +354,10 @@ class OrderViewSet(viewsets.ViewSet):
                     rp_order = client.create_order(order)
                 except Exception as exc:  # network / gateway error
                     raise serializers.ValidationError(
-                        {"detail": "failed to create razorpay order", "error": str(exc)},
+                        {
+                            "detail": "failed to create razorpay order",
+                            "error": str(exc),
+                        },
                     ) from exc
 
         _notify_order_placed(order)
@@ -440,18 +446,20 @@ def _notify_order_placed(order: Order) -> None:
 @permission_classes([AllowAny])
 def razorpay_webhook(request):
     """Public webhook endpoint for Razorpay."""
-    signature = request.META.get("HTTP_X_RAZORPAY_SIGNATURE")
+    signature = request.headers.get("x-razorpay-signature")
     body = request.body or b""
     client = RazorpayClient()
     try:
         payload = client.handle_webhook(body, signature)
     except ValueError:
         return Response(
-            {"detail": "invalid signature"}, status=status.HTTP_400_BAD_REQUEST,
+            {"detail": "invalid signature"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
     except Exception as exc:
         return Response(
-            {"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            {"detail": str(exc)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     return Response({"status": "ok", "event": payload.get("event")})
 
@@ -466,7 +474,12 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
     pagination_class = GenericPaginationClass
     serializer_class = AdminOrderSerializer
     filter_backends = (DjangoFilterBackend, filters.SearchFilter)
-    filterset_fields = ["status", "payment_status", "payment_method", "assigned_provider"]
+    filterset_fields = [
+        "status",
+        "payment_status",
+        "payment_method",
+        "assigned_provider",
+    ]
     search_fields = ["order_number", "user__name", "user__phone"]
     queryset = Order.objects.all().order_by("-placed_at")
 
@@ -496,7 +509,8 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
         serializer = AssignProviderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         provider = get_object_or_404(
-            Provider, pk=serializer.validated_data["provider_id"],
+            Provider,
+            pk=serializer.validated_data["provider_id"],
         )
         order.assigned_provider = provider
         order.save(update_fields=["assigned_provider", "updated_at"])

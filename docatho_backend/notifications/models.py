@@ -33,7 +33,7 @@ class Notification(BaseModel):
     )
     notification_type = models.CharField(
         max_length=32,
-        choices=NotificationType.choices,
+        choices=NotificationType,
         default=NotificationType.GENERIC,
     )
     title = models.CharField(max_length=255)

@@ -1,19 +1,21 @@
 from django.urls import path
 
-from .views import RegisterView, user_detail_view
+from docatho_backend.users.views import RegisterView
+from docatho_backend.users.views import SendOTPApiView
+from docatho_backend.users.views import VerifyOtpAPIView
+
+from .views import AdminLoginView
+from .views import CreateAddressAPIView
+from .views import DashboardView
+from .views import ListUsersAPIView
+from .views import RegisterView
+from .views import UpdateAddressAPIView
+from .views import UpdateProfileAPIView
+from .views import UserDetailAPIView
+from .views import UserProfileView
+from .views import user_detail_view
 from .views import user_redirect_view
 from .views import user_update_view
-from docatho_backend.users.views import SendOTPApiView, VerifyOtpAPIView, RegisterView
-from .views import (
-    UpdateProfileAPIView,
-    AdminLoginView,
-    CreateAddressAPIView,
-    UpdateAddressAPIView,
-    DashboardView,
-    UserProfileView,
-    ListUsersAPIView,
-    UserDetailAPIView,
-)
 
 app_name = "users"
 urlpatterns = [

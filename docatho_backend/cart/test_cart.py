@@ -17,7 +17,9 @@ def test_add_item_first_add_does_not_double_count(auth_client):
     med = MedicineFactory()
     client = auth_client(user)
     resp = client.post(
-        "/api/cart/add/", {"medicine_id": med.id, "quantity": 1}, format="json",
+        "/api/cart/add/",
+        {"medicine_id": med.id, "quantity": 1},
+        format="json",
     )
     assert resp.status_code == 200
     cart = Cart.objects.get(user=user)
@@ -41,7 +43,9 @@ def test_update_and_remove_and_clear(auth_client):
     client.post("/api/cart/add/", {"medicine_id": med.id, "quantity": 2}, format="json")
 
     client.patch(
-        "/api/cart/update-item/", {"medicine_id": med.id, "quantity": 4}, format="json",
+        "/api/cart/update-item/",
+        {"medicine_id": med.id, "quantity": 4},
+        format="json",
     )
     assert Cart.objects.get(user=user).items.get(medicine=med).quantity == 4
 

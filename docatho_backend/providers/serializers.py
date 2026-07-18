@@ -41,7 +41,9 @@ class AdminProviderSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(source="user.phone", read_only=True)
     email = serializers.EmailField(source="user.email", read_only=True, default=None)
     user_name = serializers.CharField(
-        source="user.name", read_only=True, default=None,
+        source="user.name",
+        read_only=True,
+        default=None,
     )
 
     class Meta:
@@ -72,7 +74,9 @@ class AdminProviderCreateSerializer(serializers.Serializer):
 
     name = serializers.CharField()
     specialty = serializers.CharField(
-        required=False, allow_blank=True, default="",
+        required=False,
+        allow_blank=True,
+        default="",
     )
     provider_type = serializers.ChoiceField(
         choices=ProviderType.choices(),

@@ -42,11 +42,18 @@ jobs:
         ports:
           - 5432:5432
         env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
 
     env:
-      # postgres://user:password@host:port/database
-      DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/postgres'
+      # settings read individual POSTGRES_* vars (see config/settings/base.py)
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: '5432'
 
     steps:
       - name: Checkout Code Repository

@@ -49,7 +49,10 @@ class Command(BaseCommand):
             if str(path).lower().endswith(".csv"):
                 # read CSV as text to preserve columns exactly
                 df = pd.read_csv(
-                    path, dtype=str, encoding="utf-8", keep_default_na=False,
+                    path,
+                    dtype=str,
+                    encoding="utf-8",
+                    keep_default_na=False,
                 )
             else:
                 df = pd.read_excel(path, sheet_name=sheet, dtype=str)
@@ -60,7 +63,8 @@ class Command(BaseCommand):
         # normalize and drop empty/unnamed columns
         df.columns = [str(c).strip() for c in df.columns]
         df = df.loc[
-            :, [c for c in df.columns if c and not str(c).lower().startswith("unnamed")],
+            :,
+            [c for c in df.columns if c and not str(c).lower().startswith("unnamed")],
         ]
         df.columns = [c.upper() for c in df.columns]
 

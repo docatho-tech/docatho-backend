@@ -1,4 +1,5 @@
 import logging
+
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.db.models import QuerySet
@@ -8,23 +9,25 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView
 from django.views.generic import RedirectView
 from django.views.generic import UpdateView
-from rest_framework import permissions, serializers
-from rest_framework.response import Response
+from rest_framework import permissions
+from rest_framework import serializers
 from rest_framework import status
+from rest_framework.authtoken.models import Token
+from rest_framework.response import Response
 from rest_framework.views import APIView
-from docatho_backend.users.helper import generate_otp
-from docatho_backend.users.models import PhoneOtp, User, Address
-from docatho_backend.users.serializers import (
-    SendOtpSerializer,
-    UserProfileSerializer,
-    UserListSerializer,
-    UserDetailSerializer,
-    VerifyOtpSerializer,
-)
+
 from docatho_backend.medicines.models import Category
 from docatho_backend.medicines.serializers import CategorySerializer
 from docatho_backend.orders.paginators import GenericPaginationClass
-from rest_framework.authtoken.models import Token
+from docatho_backend.users.helper import generate_otp
+from docatho_backend.users.models import Address
+from docatho_backend.users.models import PhoneOtp
+from docatho_backend.users.models import User
+from docatho_backend.users.serializers import SendOtpSerializer
+from docatho_backend.users.serializers import UserDetailSerializer
+from docatho_backend.users.serializers import UserListSerializer
+from docatho_backend.users.serializers import UserProfileSerializer
+from docatho_backend.users.serializers import VerifyOtpSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +91,8 @@ class SendOTPApiView(APIView):
             otp_obj.refresh_code(otp_value)
             logger.info("OTP sent for new user %s", phone_number)
             return Response(
-                {"detail": "OTP Sent Successfully"}, status=status.HTTP_200_OK
+                {"detail": "OTP Sent Successfully"},
+                status=status.HTTP_200_OK,
             )
 
         if not user.is_active:
@@ -169,7 +173,8 @@ class VerifyOtpAPIView(APIView):
 
         if otp_value != (otp_obj.otp or "").strip():
             return Response(
-                {"detail": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Invalid OTP"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         otp_obj.delete()
@@ -216,7 +221,6 @@ class RegisterView(APIView):
     authentication_classes = []
 
     def post(self, request):
-
         try:
             User.objects.get(phone=request.data.get("phone"))
             return Response(
@@ -313,7 +317,11 @@ class CreateAddressAPIView(APIView):
 
     def get(self, request):
         addresses = Address.objects.filter(user=request.user)
-        data = AddressSerializer(addresses, many=True, context={"request": request}).data
+        data = AddressSerializer(
+            addresses,
+            many=True,
+            context={"request": request},
+        ).data
         return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request):

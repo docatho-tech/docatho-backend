@@ -2,8 +2,9 @@
 
 import pytest
 
+from docatho_backend.testing.factories import AddressFactory
+from docatho_backend.testing.factories import UserFactory
 from docatho_backend.users.models import Address
-from docatho_backend.testing.factories import AddressFactory, UserFactory
 
 pytestmark = pytest.mark.django_db
 

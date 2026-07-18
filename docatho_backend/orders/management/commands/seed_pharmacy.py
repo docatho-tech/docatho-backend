@@ -28,26 +28,146 @@ CATEGORIES = ["Pain Relief", "Antibiotics", "Vitamins", "Skin Care", "Cardiac Ca
 
 # (name, brand, manufacturer, price, mrp, stock, schedule, category)
 MEDICINES = [
-    ("Paracetamol 500mg", "Calpol", "GSK", "25.00", "30.00", 200, DrugSchedule.OTC, "Pain Relief"),
-    ("Ibuprofen 400mg", "Brufen", "Abbott", "35.00", "42.00", 150, DrugSchedule.OTC, "Pain Relief"),
-    ("Amoxicillin 500mg", "Mox", "Sun Pharma", "85.00", "99.00", 80, DrugSchedule.H, "Antibiotics"),
-    ("Azithromycin 500mg", "Azithral", "Alembic", "120.00", "140.00", 60, DrugSchedule.H, "Antibiotics"),
-    ("Alprazolam 0.5mg", "Alprax", "Torrent", "45.00", "55.00", 40, DrugSchedule.H1, "Pain Relief"),
-    ("Vitamin C 1000mg", "Limcee", "Abbott", "18.00", "22.00", 300, DrugSchedule.OTC, "Vitamins"),
-    ("Vitamin D3 60k", "Uprise D3", "Alkem", "55.00", "65.00", 120, DrugSchedule.OTC, "Vitamins"),
-    ("Cetirizine 10mg", "Cetzine", "Dr Reddy", "20.00", "25.00", 180, DrugSchedule.OTC, "Skin Care"),
-    ("Atorvastatin 10mg", "Atorva", "Zydus", "95.00", "110.00", 90, DrugSchedule.H, "Cardiac Care"),
-    ("Morphine 10mg", "Morcontin", "Modi-Mundipharma", "180.00", "210.00", 15, DrugSchedule.X, "Pain Relief"),
+    (
+        "Paracetamol 500mg",
+        "Calpol",
+        "GSK",
+        "25.00",
+        "30.00",
+        200,
+        DrugSchedule.OTC,
+        "Pain Relief",
+    ),
+    (
+        "Ibuprofen 400mg",
+        "Brufen",
+        "Abbott",
+        "35.00",
+        "42.00",
+        150,
+        DrugSchedule.OTC,
+        "Pain Relief",
+    ),
+    (
+        "Amoxicillin 500mg",
+        "Mox",
+        "Sun Pharma",
+        "85.00",
+        "99.00",
+        80,
+        DrugSchedule.H,
+        "Antibiotics",
+    ),
+    (
+        "Azithromycin 500mg",
+        "Azithral",
+        "Alembic",
+        "120.00",
+        "140.00",
+        60,
+        DrugSchedule.H,
+        "Antibiotics",
+    ),
+    (
+        "Alprazolam 0.5mg",
+        "Alprax",
+        "Torrent",
+        "45.00",
+        "55.00",
+        40,
+        DrugSchedule.H1,
+        "Pain Relief",
+    ),
+    (
+        "Vitamin C 1000mg",
+        "Limcee",
+        "Abbott",
+        "18.00",
+        "22.00",
+        300,
+        DrugSchedule.OTC,
+        "Vitamins",
+    ),
+    (
+        "Vitamin D3 60k",
+        "Uprise D3",
+        "Alkem",
+        "55.00",
+        "65.00",
+        120,
+        DrugSchedule.OTC,
+        "Vitamins",
+    ),
+    (
+        "Cetirizine 10mg",
+        "Cetzine",
+        "Dr Reddy",
+        "20.00",
+        "25.00",
+        180,
+        DrugSchedule.OTC,
+        "Skin Care",
+    ),
+    (
+        "Atorvastatin 10mg",
+        "Atorva",
+        "Zydus",
+        "95.00",
+        "110.00",
+        90,
+        DrugSchedule.H,
+        "Cardiac Care",
+    ),
+    (
+        "Morphine 10mg",
+        "Morcontin",
+        "Modi-Mundipharma",
+        "180.00",
+        "210.00",
+        15,
+        DrugSchedule.X,
+        "Pain Relief",
+    ),
 ]
 
 # label -> (status, payment_method, payment_status)
 ORDER_SCENARIOS = [
-    ("placed", Order.Status.PLACED, Order.PaymentMethod.ONLINE, Order.PaymentStatus.PENDING),
-    ("approved", Order.Status.APPROVED, Order.PaymentMethod.ONLINE, Order.PaymentStatus.PAID),
-    ("packed", Order.Status.PACKED, Order.PaymentMethod.COD, Order.PaymentStatus.PENDING),
-    ("out_for_delivery", Order.Status.OUT_FOR_DELIVERY, Order.PaymentMethod.ONLINE, Order.PaymentStatus.PAID),
-    ("delivered", Order.Status.DELIVERED, Order.PaymentMethod.COD, Order.PaymentStatus.PAID),
-    ("rejected", Order.Status.REJECTED, Order.PaymentMethod.ONLINE, Order.PaymentStatus.REFUNDED),
+    (
+        "placed",
+        Order.Status.PLACED,
+        Order.PaymentMethod.ONLINE,
+        Order.PaymentStatus.PENDING,
+    ),
+    (
+        "approved",
+        Order.Status.APPROVED,
+        Order.PaymentMethod.ONLINE,
+        Order.PaymentStatus.PAID,
+    ),
+    (
+        "packed",
+        Order.Status.PACKED,
+        Order.PaymentMethod.COD,
+        Order.PaymentStatus.PENDING,
+    ),
+    (
+        "out_for_delivery",
+        Order.Status.OUT_FOR_DELIVERY,
+        Order.PaymentMethod.ONLINE,
+        Order.PaymentStatus.PAID,
+    ),
+    (
+        "delivered",
+        Order.Status.DELIVERED,
+        Order.PaymentMethod.COD,
+        Order.PaymentStatus.PAID,
+    ),
+    (
+        "rejected",
+        Order.Status.REJECTED,
+        Order.PaymentMethod.ONLINE,
+        Order.PaymentStatus.REFUNDED,
+    ),
 ]
 
 
@@ -71,7 +191,7 @@ class Command(BaseCommand):
             name: Category.objects.get_or_create(name=name)[0] for name in CATEGORIES
         }
         medicines = {}
-        for (name, brand, mfr, price, mrp, stock, schedule, cat) in MEDICINES:
+        for name, brand, mfr, price, mrp, stock, schedule, cat in MEDICINES:
             med, _ = Medicine.objects.get_or_create(
                 name=name,
                 defaults={
@@ -101,7 +221,10 @@ class Command(BaseCommand):
 
         providers = []
         for i, (phone, pname) in enumerate(
-            [("+919811000001", "HealthPlus Chemist"), ("+919811000002", "CityMed Pharmacy")],
+            [
+                ("+919811000001", "HealthPlus Chemist"),
+                ("+919811000002", "CityMed Pharmacy"),
+            ],
         ):
             puser = self._user(phone, pname + " Owner", f"provider{i}@docatho.test")
             provider, _ = Provider.objects.get_or_create(
@@ -134,7 +257,9 @@ class Command(BaseCommand):
             )
             for med in seed_meds:
                 OrderItem.objects.create(
-                    order=order, medicine=med, quantity=1 + (idx % 2),
+                    order=order,
+                    medicine=med,
+                    quantity=1 + (idx % 2),
                 )
             order.recalc_totals()
             order.compute_commission()

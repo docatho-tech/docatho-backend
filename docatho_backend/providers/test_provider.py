@@ -65,10 +65,12 @@ def test_provider_cannot_set_disallowed_status(auth_client):
 def test_provider_earnings(auth_client):
     provider = ProviderFactory()
     o = OrderFactory(
-        assigned_provider=provider, payment_status=Order.PaymentStatus.PAID,
+        assigned_provider=provider,
+        payment_status=Order.PaymentStatus.PAID,
     )
     Order.objects.filter(pk=o.pk).update(
-        total=Decimal("100.00"), provider_earning=Decimal("90.00"),
+        total=Decimal("100.00"),
+        provider_earning=Decimal("90.00"),
     )
     resp = auth_client(provider.user).get("/api/providers/earnings/")
     assert resp.status_code == 200

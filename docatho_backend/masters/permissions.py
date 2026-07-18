@@ -23,9 +23,7 @@ from rest_framework.permissions import IsAdminUser as _IsAdminUser
 def is_provider(user) -> bool:
     """True if ``user`` is authenticated and linked to a Provider record."""
     return bool(
-        user
-        and user.is_authenticated
-        and _provider_exists(user),
+        user and user.is_authenticated and _provider_exists(user),
     )
 
 
@@ -74,7 +72,9 @@ class ReadOnlyOrAdmin(BasePermission):
     def has_permission(self, request, view) -> bool:
         if request.method in SAFE_METHODS:
             return True
-        return bool(request.user and request.user.is_authenticated and request.user.is_staff)
+        return bool(
+            request.user and request.user.is_authenticated and request.user.is_staff,
+        )
 
 
 class IsAdminOrProvider(BasePermission):
@@ -84,4 +84,6 @@ class IsAdminOrProvider(BasePermission):
 
     def has_permission(self, request, view) -> bool:
         user = request.user
-        return bool(user and user.is_authenticated and (user.is_staff or is_provider(user)))
+        return bool(
+            user and user.is_authenticated and (user.is_staff or is_provider(user)),
+        )

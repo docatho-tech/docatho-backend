@@ -85,7 +85,9 @@ def test_full_cod_journey_cart_to_delivered_to_invoice(auth_client):
 
     # --- checkout (COD) ---
     checkout = cust.post(
-        "/api/orders/checkout/", {"payment_method": "cod"}, format="json",
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
     )
     assert checkout.status_code == 201, checkout.data
     order_id = checkout.data["order"]["id"]
@@ -97,7 +99,8 @@ def test_full_cod_journey_cart_to_delivered_to_invoice(auth_client):
     assert med.stock == 8
     assert Cart.objects.get(user=customer).items.count() == 0
     assert customer.notifications.filter(
-        notification_type=NotificationType.ORDER_PLACED, order=order,
+        notification_type=NotificationType.ORDER_PLACED,
+        order=order,
     ).exists()
 
     # --- admin assigns a fulfilling pharmacy ---
@@ -114,7 +117,8 @@ def test_full_cod_journey_cart_to_delivered_to_invoice(auth_client):
     assert order.status == Order.Status.DELIVERED
     assert order.delivered_at is not None
     assert customer.notifications.filter(
-        notification_type=NotificationType.ORDER_DELIVERED, order=order,
+        notification_type=NotificationType.ORDER_DELIVERED,
+        order=order,
     ).exists()
 
     # delivering does not return stock
@@ -148,7 +152,9 @@ def test_full_online_journey_with_payment_confirmation(auth_client, settings):
         return_value=_FakeRpResponse(rp_order),
     ):
         checkout = cust.post(
-            "/api/orders/checkout/", {"payment_method": "online"}, format="json",
+            "/api/orders/checkout/",
+            {"payment_method": "online"},
+            format="json",
         )
     assert checkout.status_code == 201, checkout.data
     order_id = checkout.data["order"]["id"]
@@ -162,7 +168,8 @@ def test_full_online_journey_with_payment_confirmation(auth_client, settings):
     assert Cart.objects.get(user=customer).items.count() == 1
     # a pending transaction was persisted with the razorpay order id
     assert Transaction.objects.filter(
-        transaction_order_id="order_E2E", succeeded=False,
+        transaction_order_id="order_E2E",
+        succeeded=False,
     ).exists()
 
     # --- confirm payment (valid signature) ---
@@ -212,13 +219,19 @@ def test_full_rx_journey_upload_then_checkout_then_fulfil(auth_client):
 
     # blocked without a prescription
     blocked = cust.post(
-        "/api/orders/checkout/", {"payment_method": "cod"}, format="json",
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
     )
     assert blocked.status_code == 400
     assert "prescription" in str(blocked.data).lower()
 
     # upload a prescription through the API
-    rx_file = SimpleUploadedFile("rx.pdf", b"%PDF-1.4 rx", content_type="application/pdf")
+    rx_file = SimpleUploadedFile(
+        "rx.pdf",
+        b"%PDF-1.4 rx",
+        content_type="application/pdf",
+    )
     upload = cust.post("/api/prescriptions/", {"image": rx_file}, format="multipart")
     assert upload.status_code == 201, upload.data
     prescription_id = upload.data["id"]
@@ -264,7 +277,9 @@ def test_customer_cancellation_after_cod_checkout_restores_stock(auth_client):
     cust = auth_client(customer)
     _add_to_cart(cust, med, qty=4)
     checkout = cust.post(
-        "/api/orders/checkout/", {"payment_method": "cod"}, format="json",
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
     )
     order_id = checkout.data["order"]["id"]
     med.refresh_from_db()
@@ -293,7 +308,9 @@ def test_provider_rejection_restores_stock(auth_client):
     cust = auth_client(customer)
     _add_to_cart(cust, med, qty=3)
     order_id = cust.post(
-        "/api/orders/checkout/", {"payment_method": "cod"}, format="json",
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
     ).data["order"]["id"]
 
     auth_client(admin).patch(
@@ -326,14 +343,19 @@ def test_customer_cannot_touch_another_customers_order(auth_client):
     owner_client = auth_client(owner)
     _add_to_cart(owner_client, med, qty=1)
     order_id = owner_client.post(
-        "/api/orders/checkout/", {"payment_method": "cod"}, format="json",
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
     ).data["order"]["id"]
 
     intruder_client = auth_client(intruder)
     assert intruder_client.get(f"/api/orders/{order_id}/").status_code == 404
     assert intruder_client.get(f"/api/orders/{order_id}/invoice/").status_code == 404
-    assert intruder_client.patch(
-        f"/api/orders/{order_id}/update-status/",
-        {"status": "cancelled"},
-        format="json",
-    ).status_code == 404
+    assert (
+        intruder_client.patch(
+            f"/api/orders/{order_id}/update-status/",
+            {"status": "cancelled"},
+            format="json",
+        ).status_code
+        == 404
+    )

@@ -85,7 +85,10 @@ def render_invoice_pdf(order: Order) -> bytes:
                 _money(it.line_total),
             ],
         )
-    items_table = Table(item_rows, colWidths=[10 * mm, 85 * mm, 15 * mm, 25 * mm, 30 * mm])
+    items_table = Table(
+        item_rows,
+        colWidths=[10 * mm, 85 * mm, 15 * mm, 25 * mm, 30 * mm],
+    )
     items_table.setStyle(
         TableStyle(
             [
@@ -94,7 +97,12 @@ def render_invoice_pdf(order: Order) -> bytes:
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#E5E7EB")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9FAFB")]),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [colors.white, colors.HexColor("#F9FAFB")],
+                ),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                 ("TOPPADDING", (0, 0), (-1, -1), 5),
             ],

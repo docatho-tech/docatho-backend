@@ -49,7 +49,10 @@ class RazorpayClient:
             or {"order_id": str(order.pk), "user_id": str(order.user_id)},
         }
         resp = requests.post(
-            f"{RAZORPAY_API_BASE}/orders", auth=self._auth(), json=payload, timeout=15,
+            f"{RAZORPAY_API_BASE}/orders",
+            auth=self._auth(),
+            json=payload,
+            timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -71,7 +74,10 @@ class RazorpayClient:
         return hmac.compare_digest(expected, signature)
 
     def verify_payment_signature(
-        self, razorpay_order_id: str, razorpay_payment_id: str, razorpay_signature: str,
+        self,
+        razorpay_order_id: str,
+        razorpay_payment_id: str,
+        razorpay_signature: str,
     ) -> bool:
         """
         Verify signature returned by client after checkout:
@@ -105,7 +111,9 @@ class RazorpayClient:
 
         if razorpay_signature:
             ok = self.verify_payment_signature(
-                razorpay_order_id, razorpay_payment_id, razorpay_signature,
+                razorpay_order_id,
+                razorpay_payment_id,
+                razorpay_signature,
             )
             if not ok:
                 # record failure
@@ -151,7 +159,9 @@ class RazorpayClient:
         return tr
 
     def handle_webhook(
-        self, body_bytes: bytes, signature_header: str,
+        self,
+        body_bytes: bytes,
+        signature_header: str,
     ) -> dict[str, Any]:
         """
         Verify webhook using RAZORPAY_WEBHOOK_SECRET and return parsed payload.

@@ -19,7 +19,9 @@ def test_notify_persists_and_marks_sent():
 
 
 def test_delivery_failure_does_not_break_caller(settings):
-    settings.NOTIFICATION_BACKEND = "docatho_backend.notifications.test_notifications.BrokenBackend"
+    settings.NOTIFICATION_BACKEND = (
+        "docatho_backend.notifications.test_notifications.BrokenBackend"
+    )
     user = UserFactory()
     n = notify(user, NotificationType.GENERIC, "Still works")
     assert Notification.objects.filter(pk=n.pk).exists()

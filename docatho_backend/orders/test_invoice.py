@@ -19,7 +19,10 @@ def _order_with_items(user):
     address = AddressFactory(user=user)
     order = OrderFactory(user=user, address=address)
     OrderItemFactory(
-        order=order, medicine=MedicineFactory(), quantity=2, unit_price=Decimal("25.00"),
+        order=order,
+        medicine=MedicineFactory(),
+        quantity=2,
+        unit_price=Decimal("25.00"),
     )
     order.recalc_totals()
     return order

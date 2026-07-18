@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from docatho_backend.users.models import User, Address
+
+from docatho_backend.users.models import Address
+from docatho_backend.users.models import User
 
 
 class SendOtpSerializer(serializers.Serializer):

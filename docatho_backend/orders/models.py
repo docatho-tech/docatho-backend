@@ -35,7 +35,9 @@ class Prescription(BaseModel):
     )
     image = models.FileField(upload_to="prescriptions/%Y/%m/")
     status = models.CharField(
-        max_length=16, choices=Status.choices, default=Status.PENDING,
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
     )
     notes = models.TextField(blank=True, null=True)
 
@@ -76,7 +78,9 @@ class Order(BaseModel):
 
     order_number = models.CharField(max_length=64, unique=True, db_index=True)
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="orders",
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="orders",
     )
     # select the address used for this order
     address = models.ForeignKey(
@@ -103,10 +107,14 @@ class Order(BaseModel):
         related_name="orders",
     )
     status = models.CharField(
-        max_length=32, choices=Status.choices, default=Status.PLACED,
+        max_length=32,
+        choices=Status.choices,
+        default=Status.PLACED,
     )
     payment_status = models.CharField(
-        max_length=32, choices=PaymentStatus.choices, default=PaymentStatus.PENDING,
+        max_length=32,
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.PENDING,
     )
     payment_method = models.CharField(
         max_length=16,
@@ -115,30 +123,46 @@ class Order(BaseModel):
     )
 
     total_mrp = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     delivery_fee = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     discount_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     total = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
 
     # Money split (EP-11): platform commission vs. provider payout.
     commission_rate = models.DecimalField(
-        max_digits=5, decimal_places=2, default=Decimal("0.00"),
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     commission_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     provider_earning = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
 
     stock_reserved = models.BooleanField(default=False)
@@ -220,9 +244,7 @@ class Order(BaseModel):
             return
         items = list(self.items.select_related("medicine"))
         shortages = [
-            it.medicine.name
-            for it in items
-            if it.medicine.stock < it.quantity
+            it.medicine.name for it in items if it.medicine.stock < it.quantity
         ]
         if shortages:
             raise ValueError(f"Out of stock: {', '.join(shortages)}")
@@ -294,12 +316,16 @@ class Order(BaseModel):
 class OrderItem(BaseModel):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     medicine = models.ForeignKey(
-        Medicine, on_delete=models.PROTECT, related_name="order_items",
+        Medicine,
+        on_delete=models.PROTECT,
+        related_name="order_items",
     )
     quantity = models.PositiveIntegerField(default=1)
     # price snapshot at order time
     unit_price = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     mrp = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     prescription_required = models.BooleanField(default=False)
@@ -329,23 +355,37 @@ class OrderItem(BaseModel):
 
 class Transaction(BaseModel):
     order = models.ForeignKey(
-        Order, on_delete=models.CASCADE, related_name="transactions",
+        Order,
+        on_delete=models.CASCADE,
+        related_name="transactions",
     )
     provider = models.CharField(
-        max_length=100, default="razorpay", editable=False,
+        max_length=100,
+        default="razorpay",
+        editable=False,
     )  # always razorpay
     payment_method = models.CharField(
-        max_length=50, blank=True, null=True,
+        max_length=50,
+        blank=True,
+        null=True,
     )  # e.g. card, upi, netbanking
     transaction_order_id = models.CharField(
-        max_length=255, blank=True, null=True, db_index=True,
+        max_length=255,
+        blank=True,
+        null=True,
+        db_index=True,
     )
     razorpay_payment_id = models.CharField(
-        max_length=255, blank=True, null=True, db_index=True,
+        max_length=255,
+        blank=True,
+        null=True,
+        db_index=True,
     )
     razorpay_signature = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00"),
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
     )
     succeeded = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
@@ -377,7 +417,9 @@ class Invoice(BaseModel):
     """A generated invoice for an order (EP-03 download, EP-10 admin)."""
 
     order = models.OneToOneField(
-        Order, on_delete=models.CASCADE, related_name="invoice",
+        Order,
+        on_delete=models.CASCADE,
+        related_name="invoice",
     )
     invoice_number = models.CharField(max_length=64, unique=True, db_index=True)
     pdf = models.FileField(upload_to="invoices/%Y/%m/", blank=True, null=True)

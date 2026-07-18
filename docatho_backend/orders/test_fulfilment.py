@@ -1,6 +1,5 @@
 """Order lifecycle, provider assignment, stock release, and permissions."""
 
-
 import pytest
 
 from docatho_backend.orders.models import Order

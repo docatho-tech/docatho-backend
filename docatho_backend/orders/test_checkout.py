@@ -27,7 +27,11 @@ def test_cod_checkout_creates_order_reserves_stock_and_clears_cart(auth_client):
     _cart_with(user, med, qty=2)
     client = auth_client(user)
 
-    resp = client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    resp = client.post(
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
+    )
 
     assert resp.status_code == 201, resp.data
     body = resp.data
@@ -50,7 +54,11 @@ def test_cod_checkout_applies_discount_and_commission(auth_client, settings):
     _cart_with(user, med, qty=1)
     client = auth_client(user)
 
-    resp = client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    resp = client.post(
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
+    )
     order = Order.objects.get(pk=resp.data["order"]["id"])
 
     assert order.subtotal == Decimal("100.00")
@@ -67,7 +75,11 @@ def test_rx_gate_blocks_checkout_without_prescription(auth_client):
     _cart_with(user, rx_med, qty=1)
     client = auth_client(user)
 
-    resp = client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    resp = client.post(
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
+    )
 
     assert resp.status_code == 400
     assert "prescription" in str(resp.data).lower()
@@ -115,7 +127,11 @@ def test_checkout_blocks_when_out_of_stock(auth_client):
     _cart_with(user, med, qty=3)
     client = auth_client(user)
 
-    resp = client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    resp = client.post(
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
+    )
     assert resp.status_code == 400
     assert "stock" in str(resp.data).lower()
 
@@ -124,7 +140,11 @@ def test_empty_cart_checkout_rejected(auth_client):
     user = UserFactory()
     Cart.objects.create(user=user)
     client = auth_client(user)
-    resp = client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    resp = client.post(
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
+    )
     assert resp.status_code == 400
 
 
@@ -140,7 +160,9 @@ def test_online_checkout_calls_gateway_and_defers_stock(auth_client):
         return_value=fake_rp,
     ) as create_order:
         resp = client.post(
-            "/api/orders/checkout/", {"payment_method": "online"}, format="json",
+            "/api/orders/checkout/",
+            {"payment_method": "online"},
+            format="json",
         )
 
     assert resp.status_code == 201, resp.data
@@ -154,5 +176,9 @@ def test_online_checkout_calls_gateway_and_defers_stock(auth_client):
 
 
 def test_checkout_requires_authentication(api_client):
-    resp = api_client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    resp = api_client.post(
+        "/api/orders/checkout/",
+        {"payment_method": "cod"},
+        format="json",
+    )
     assert resp.status_code in (401, 403)

@@ -9,7 +9,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--names", type=str, help="Comma separated category names")
         parser.add_argument(
-            "--file", type=str, help="Path to newline-separated names file",
+            "--file",
+            type=str,
+            help="Path to newline-separated names file",
         )
 
     def handle(self, *args, **options):

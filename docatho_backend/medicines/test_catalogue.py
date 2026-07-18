@@ -1,6 +1,5 @@
 """Catalogue: browse/search/filter, Rx auto-flagging, admin-only writes."""
 
-
 import pytest
 
 from docatho_backend.medicines.models import DrugSchedule
@@ -52,7 +51,11 @@ def test_filter_by_prescription_required(auth_client):
 
 def test_non_admin_cannot_create_medicine(auth_client):
     client = auth_client(UserFactory())
-    resp = client.post("/api/medicines/", {"name": "Hack", "price": "1.00"}, format="json")
+    resp = client.post(
+        "/api/medicines/",
+        {"name": "Hack", "price": "1.00"},
+        format="json",
+    )
     assert resp.status_code == 403
 
 
