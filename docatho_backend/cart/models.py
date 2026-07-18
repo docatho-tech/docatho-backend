@@ -2,8 +2,8 @@ from decimal import Decimal
 from typing import Optional
 
 from django.conf import settings
-from django.db import models, transaction
-from django.utils.translation import gettext_lazy as _
+from django.db import models
+from django.db import transaction
 
 from docatho_backend.masters.models import BaseModel
 from docatho_backend.medicines.models import Medicine
@@ -12,7 +12,7 @@ from docatho_backend.medicines.models import Medicine
 class Cart(BaseModel):
 
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="carts"
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="carts",
     )
 
     # Address model assumed at users.Address; change the string if different.
@@ -25,16 +25,16 @@ class Cart(BaseModel):
     )
 
     total_mrp = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=Decimal("0.00"),
     )
     subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=Decimal("0.00"),
     )
     discount_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=Decimal("0.00"),
     )
     total = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=Decimal("0.00"),
     )
 
     # discount_type: 'fixed' applies absolute amount, 'percent' applies percent to subtotal
@@ -42,7 +42,7 @@ class Cart(BaseModel):
     DISCOUNT_PERCENT = "percent"
     DISCOUNT_CHOICES = ((DISCOUNT_FIXED, "Fixed"), (DISCOUNT_PERCENT, "Percent"))
     discount_type = models.CharField(
-        max_length=16, choices=DISCOUNT_CHOICES, default=DISCOUNT_FIXED
+        max_length=16, choices=DISCOUNT_CHOICES, default=DISCOUNT_FIXED,
     )
 
     notes = models.TextField(blank=True, null=True)
@@ -51,11 +51,10 @@ class Cart(BaseModel):
         ordering = ("-updated_at",)
 
     def __str__(self) -> str:
-        return f"Cart<{self.pk}> user={self.user_id} status={self.status}"
+        return f"Cart<{self.pk}> user={self.user_id}"
 
     @transaction.atomic
     def add_item(self, medicine: Medicine, quantity: int = 1) -> "CartItem":
-        print(medicine, quantity)
         if int(quantity) < 1:
             raise ValueError("quantity must be >= 1")
         item, created = CartItem.objects.get_or_create(
@@ -65,11 +64,14 @@ class Cart(BaseModel):
                 "quantity": quantity,
                 "unit_price": getattr(medicine, "price", Decimal("0.00")),
                 "mrp": getattr(
-                    medicine, "mrp", getattr(medicine, "price", Decimal("0.00"))
+                    medicine, "mrp", getattr(medicine, "price", Decimal("0.00")),
                 ),
             },
         )
-        item.quantity = item.quantity + quantity
+        # get_or_create already set quantity on a new row; only accumulate on an
+        # existing one (the previous code double-counted the first add).
+        if not created:
+            item.quantity = item.quantity + quantity
         # refresh unit prices from medicine snapshot
         item.unit_price = getattr(medicine, "price", item.unit_price) or Decimal("0.00")
         item.mrp = getattr(medicine, "mrp", item.mrp) or item.unit_price
@@ -79,7 +81,7 @@ class Cart(BaseModel):
 
     @transaction.atomic
     def update_item_quantity(
-        self, medicine: Medicine, quantity: int
+        self, medicine: Medicine, quantity: int,
     ) -> Optional["CartItem"]:
         try:
             item = CartItem.objects.get(cart=self, medicine=medicine)
@@ -118,17 +120,16 @@ class Cart(BaseModel):
             try:
                 pct = Decimal(self.discount_amount)
                 discount = (self.subtotal * (pct / Decimal("100"))).quantize(
-                    Decimal("0.01")
+                    Decimal("0.01"),
                 )
             except Exception:
                 discount = Decimal("0.00")
         else:
             discount = Decimal(self.discount_amount or Decimal("0.00")).quantize(
-                Decimal("0.01")
+                Decimal("0.01"),
             )
         # ensure discount is not > subtotal
-        if discount > self.subtotal:
-            discount = self.subtotal
+        discount = min(discount, self.subtotal)
         self.discount_amount = discount
         self.total = (self.subtotal - discount).quantize(Decimal("0.01"))
         # persist totals
@@ -139,20 +140,20 @@ class Cart(BaseModel):
                 "discount_amount",
                 "total",
                 "updated_at",
-            ]
+            ],
         )
 
 
 class CartItem(BaseModel):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
     medicine = models.ForeignKey(
-        Medicine, on_delete=models.PROTECT, related_name="cart_items"
+        Medicine, on_delete=models.PROTECT, related_name="cart_items",
     )
 
     quantity = models.PositiveIntegerField(default=1)
     # snapshot prices so changes in product don't affect historical cart rows
     unit_price = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=Decimal("0.00"),
     )
     mrp = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 

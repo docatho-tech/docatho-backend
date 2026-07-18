@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from factory import Faker
+from factory import Sequence as FactorySequence
 from factory import post_generation
 from factory.django import DjangoModelFactory
 
@@ -11,6 +12,8 @@ from docatho_backend.users.models import User
 class UserFactory(DjangoModelFactory[User]):
     email = Faker("email")
     name = Faker("name")
+    # phone is the USERNAME_FIELD and is required; generate a unique valid one.
+    phone = FactorySequence(lambda n: f"+9199{n:08d}")
 
     @post_generation
     def password(self, create: bool, extracted: Sequence[Any], **kwargs):  # noqa: FBT001

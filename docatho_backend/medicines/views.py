@@ -1,11 +1,12 @@
-from django.shortcuts import render
 from rest_framework import viewsets
-
-from docatho_backend.medicines.models import Category, Medicine
-from docatho_backend.medicines.serializers import CategorySerializer, MedicineSerializer
 from rest_framework.pagination import PageNumberPagination
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import filters
+
+from docatho_backend.masters.permissions import IsAdmin
+from docatho_backend.masters.permissions import ReadOnlyOrAdmin
+from docatho_backend.medicines.models import Category
+from docatho_backend.medicines.models import Medicine
+from docatho_backend.medicines.serializers import CategorySerializer
+from docatho_backend.medicines.serializers import MedicineSerializer
 
 
 class GenericPaginationClass(PageNumberPagination):
@@ -15,32 +16,46 @@ class GenericPaginationClass(PageNumberPagination):
 
 
 class CategoryViewset(viewsets.ModelViewSet):
-
     serializer_class = CategorySerializer
     pagination_class = GenericPaginationClass
     queryset = Category.objects.all()
+    permission_classes = [ReadOnlyOrAdmin]
     filterset_fields = ["is_active", "name"]
     search_fields = ["name", "description"]
     ordering_fields = ["created_at", "updated_at", "name"]
 
 
 class MedicineViewset(viewsets.ModelViewSet):
+    """Patient/browse-facing catalogue. Public reads, admin-only writes."""
+
     serializer_class = MedicineSerializer
     pagination_class = GenericPaginationClass
-    queryset = Medicine.objects.all()
-    filter_backends = (DjangoFilterBackend, filters.SearchFilter)
-
-    filterset_fields = ["is_active", "name", "category"]
-    search_fields = ["name", "manufacturer", "description"]
+    queryset = Medicine.objects.prefetch_related("category").all()
+    permission_classes = [ReadOnlyOrAdmin]
+    filterset_fields = [
+        "is_active",
+        "name",
+        "category",
+        "schedule",
+        "is_prescription_required",
+    ]
+    search_fields = ["name", "brand", "manufacturer", "description"]
     ordering_fields = ["created_at", "updated_at", "name", "price"]
 
 
 class AdminMedicineViewset(viewsets.ModelViewSet):
+    """Admin catalogue management (EP-09). Staff only, all methods."""
+
     serializer_class = MedicineSerializer
     pagination_class = GenericPaginationClass
-    queryset = Medicine.objects.all()
-    filter_backends = (DjangoFilterBackend, filters.SearchFilter)
-
-    filterset_fields = ["is_active", "name", "category"]
-    search_fields = ["name", "manufacturer", "description"]
+    queryset = Medicine.objects.prefetch_related("category").all()
+    permission_classes = [IsAdmin]
+    filterset_fields = [
+        "is_active",
+        "name",
+        "category",
+        "schedule",
+        "is_prescription_required",
+    ]
+    search_fields = ["name", "brand", "manufacturer", "description"]
     ordering_fields = ["created_at", "updated_at", "name", "price"]

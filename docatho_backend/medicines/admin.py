@@ -1,11 +1,13 @@
 from django.contrib import admin
 
-from docatho_backend.medicines.models import Category, Medicine
+from docatho_backend.medicines.models import Category
+from docatho_backend.medicines.models import Medicine
 
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "image_url", "created_at", "updated_at")
+    list_display = ("name", "is_active", "created_at", "updated_at")
+    list_filter = ("is_active",)
     search_fields = ("name",)
 
 
@@ -13,11 +15,15 @@ class CategoryAdmin(admin.ModelAdmin):
 class MedicineAdmin(admin.ModelAdmin):
     list_display = (
         "name",
+        "brand",
         "manufacturer",
         "price",
         "mrp",
         "stock",
-        "created_at",
-        "updated_at",
+        "schedule",
+        "is_prescription_required",
+        "is_active",
     )
-    search_fields = ("name", "manufacturer")
+    list_filter = ("schedule", "is_prescription_required", "is_active")
+    search_fields = ("name", "brand", "manufacturer")
+    filter_horizontal = ("category",)

@@ -1,4 +1,3 @@
-from ast import mod
 from django.db import models
 
 

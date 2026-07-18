@@ -1,0 +1,21 @@
+[Unit]
+Description=docatho celery worker
+After=network.target redis-server.service postgresql.service
+
+[Service]
+Type=simple
+User=docatho
+Group=www-data
+WorkingDirectory=/opt/docatho/docatho-backend
+EnvironmentFile=/etc/docatho/docatho.env
+ExecStart=/opt/docatho/docatho-backend/.venv/bin/celery \
+    -A config.celery_app worker \
+    --loglevel=info \
+    --concurrency=2
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

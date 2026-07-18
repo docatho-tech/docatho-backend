@@ -9,7 +9,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--names", type=str, help="Comma separated category names")
         parser.add_argument(
-            "--file", type=str, help="Path to newline-separated names file"
+            "--file", type=str, help="Path to newline-separated names file",
         )
 
     def handle(self, *args, **options):
@@ -18,7 +18,7 @@ class Command(BaseCommand):
             names.extend([n.strip() for n in options["names"].split(",") if n.strip()])
         if options.get("file"):
             try:
-                with open(options["file"], "r", encoding="utf-8") as fh:
+                with open(options["file"], encoding="utf-8") as fh:
                     for line in fh:
                         n = line.strip()
                         if n:
@@ -41,5 +41,5 @@ class Command(BaseCommand):
                 existed += 1
 
         self.stdout.write(
-            f"Categories processed. created={created} already_existed={existed}"
+            f"Categories processed. created={created} already_existed={existed}",
         )

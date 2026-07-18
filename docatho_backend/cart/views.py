@@ -1,19 +1,15 @@
-from decimal import Decimal
 
-from django.shortcuts import render, get_object_or_404
-
-from rest_framework import serializers, status, viewsets
+from django.shortcuts import get_object_or_404
+from rest_framework import status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from docatho_backend.cart.serializers import CartSerializer
 from docatho_backend.medicines.models import Medicine
-from .models import Cart, CartItem
-from docatho_backend.cart.serializers import (
-    CartSerializer,
-    CartItemSerializer,
-    MedicineLiteSerializer,
-)
+
+from .models import Cart
 
 
 class CartViewSet(viewsets.ViewSet):
@@ -53,7 +49,6 @@ class CartViewSet(viewsets.ViewSet):
     def add(self, request):
         medicine_id = request.data.get("medicine_id")
         quantity = int(request.data.get("quantity", 1) or 1)
-        print(medicine_id, quantity)
         if not medicine_id:
             return Response(
                 {"detail": "medicine_id is required"},
@@ -63,7 +58,7 @@ class CartViewSet(viewsets.ViewSet):
         medicine = get_object_or_404(Medicine, pk=medicine_id)
         cart = self._get_open_cart(request.user)
         try:
-            item = cart.add_item(medicine, quantity=quantity)
+            cart.add_item(medicine, quantity=quantity)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -92,11 +87,10 @@ class CartViewSet(viewsets.ViewSet):
 
         medicine = get_object_or_404(Medicine, pk=medicine_id)
         cart = self._get_open_cart(request.user)
-        print(medicine, quantity)
         item = cart.update_item_quantity(medicine, quantity)
         if item is None:
             return Response(
-                {"detail": "item not found in cart"}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "item not found in cart"}, status=status.HTTP_404_NOT_FOUND,
             )
         serializer = CartSerializer(cart, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -116,5 +110,13 @@ class CartViewSet(viewsets.ViewSet):
         medicine = get_object_or_404(Medicine, pk=medicine_id)
         cart = self._get_open_cart(request.user)
         cart.remove_item(medicine)
+        serializer = CartSerializer(cart, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"])
+    def clear(self, request):
+        """Empty the current user's cart. POST /api/cart/clear/"""
+        cart = self._get_open_cart(request.user)
+        cart.clear()
         serializer = CartSerializer(cart, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)

@@ -1,0 +1,35 @@
+name: Deploy
+
+# Deploys to the EC2 host after the CI workflow succeeds on master.
+# Also runnable on demand via the Actions tab (workflow_dispatch).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy over SSH
+    runs-on: ubuntu-latest
+    # Only deploy when CI passed (workflow_run) or when manually dispatched.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: SSH and run deploy script
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            bash /opt/docatho/docatho-backend/deploy/deploy.sh

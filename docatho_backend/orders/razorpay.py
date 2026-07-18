@@ -1,7 +1,8 @@
-import hmac
 import hashlib
+import hmac
 import json
-from typing import Any, Dict, Optional
+from decimal import Decimal
+from typing import Any
 
 import requests
 from django.conf import settings
@@ -9,14 +10,14 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 
-from .models import Order, Transaction
-
+from .models import Order
+from .models import Transaction
 
 RAZORPAY_API_BASE = "https://api.razorpay.com/v1"
 
 
 class RazorpayClient:
-    def __init__(self, key_id: Optional[str] = None, key_secret: Optional[str] = None):
+    def __init__(self, key_id: str | None = None, key_secret: str | None = None):
         self.key_id = key_id or settings.RAZORPAY_KEY_ID  # set in settings
         self.key_secret = key_secret or settings.RAZORPAY_KEY_SECRET
 
@@ -26,9 +27,9 @@ class RazorpayClient:
     def create_order(
         self,
         order: Order,
-        receipt: Optional[str] = None,
-        notes: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        receipt: str | None = None,
+        notes: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Create a Razorpay order for the provided Order model.
         Saves a Transaction row with transaction_order_id (razorpay order id).
@@ -48,7 +49,7 @@ class RazorpayClient:
             or {"order_id": str(order.pk), "user_id": str(order.user_id)},
         }
         resp = requests.post(
-            f"{RAZORPAY_API_BASE}/orders", auth=self._auth(), json=payload, timeout=15
+            f"{RAZORPAY_API_BASE}/orders", auth=self._auth(), json=payload, timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -70,7 +71,7 @@ class RazorpayClient:
         return hmac.compare_digest(expected, signature)
 
     def verify_payment_signature(
-        self, razorpay_order_id: str, razorpay_payment_id: str, razorpay_signature: str
+        self, razorpay_order_id: str, razorpay_payment_id: str, razorpay_signature: str,
     ) -> bool:
         """
         Verify signature returned by client after checkout:
@@ -78,7 +79,7 @@ class RazorpayClient:
         """
         if not (razorpay_order_id and razorpay_payment_id and razorpay_signature):
             return False
-        msg = f"{razorpay_order_id}|{razorpay_payment_id}".encode("utf-8")
+        msg = f"{razorpay_order_id}|{razorpay_payment_id}".encode()
         return self._verify_signature(msg, razorpay_signature, self.key_secret)
 
     @transaction.atomic
@@ -86,8 +87,8 @@ class RazorpayClient:
         self,
         razorpay_order_id: str,
         razorpay_payment_id: str,
-        razorpay_signature: Optional[str] = None,
-        raw_response: Optional[Dict[str, Any]] = None,
+        razorpay_signature: str | None = None,
+        raw_response: dict[str, Any] | None = None,
     ) -> Transaction:
         """
         Mark a Transaction as succeeded after verifying signature.
@@ -104,7 +105,7 @@ class RazorpayClient:
 
         if razorpay_signature:
             ok = self.verify_payment_signature(
-                razorpay_order_id, razorpay_payment_id, razorpay_signature
+                razorpay_order_id, razorpay_payment_id, razorpay_signature,
             )
             if not ok:
                 # record failure
@@ -119,7 +120,7 @@ class RazorpayClient:
                         "razorpay_payment_id",
                         "razorpay_signature",
                         "updated_at",
-                    ]
+                    ],
                 )
                 raise ValueError("Invalid signature")
 
@@ -138,7 +139,7 @@ class RazorpayClient:
                 "paid_at",
                 "raw_response",
                 "updated_at",
-            ]
+            ],
         )
 
         # update order
@@ -150,8 +151,8 @@ class RazorpayClient:
         return tr
 
     def handle_webhook(
-        self, body_bytes: bytes, signature_header: str
-    ) -> Dict[str, Any]:
+        self, body_bytes: bytes, signature_header: str,
+    ) -> dict[str, Any]:
         """
         Verify webhook using RAZORPAY_WEBHOOK_SECRET and return parsed payload.
         Additionally updates Transaction/Order for payment events (payment.captured / payment.failed).
@@ -179,17 +180,17 @@ class RazorpayClient:
             tr = None
             if rp_order_id:
                 tr = Transaction.objects.filter(
-                    transaction_order_id=rp_order_id
+                    transaction_order_id=rp_order_id,
                 ).first()
             if not tr and rp_payment_id:
                 tr = Transaction.objects.filter(
-                    razorpay_payment_id=rp_payment_id
+                    razorpay_payment_id=rp_payment_id,
                 ).first()
             # create or update transaction record
             if tr is None and rp_order_id:
                 # try to attach to order by razorpay order id -> find order
                 order = Order.objects.filter(
-                    order_number=rp_order_id
+                    order_number=rp_order_id,
                 ).first()  # fallback; normally transaction_order_id stores rp order id
                 tr = Transaction.objects.create(
                     order=order,

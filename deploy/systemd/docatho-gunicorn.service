@@ -1,0 +1,24 @@
+[Unit]
+Description=docatho gunicorn (Django WSGI) daemon
+After=network.target postgresql.service redis-server.service
+
+[Service]
+Type=notify
+User=docatho
+Group=www-data
+# Creates /run/docatho (owned by docatho:www-data) for the gunicorn socket.
+RuntimeDirectory=docatho
+RuntimeDirectoryMode=0750
+WorkingDirectory=/opt/docatho/docatho-backend
+EnvironmentFile=/etc/docatho/docatho.env
+ExecStart=/opt/docatho/docatho-backend/.venv/bin/gunicorn \
+    config.wsgi:application \
+    --config /opt/docatho/docatho-backend/deploy/gunicorn.conf.py
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

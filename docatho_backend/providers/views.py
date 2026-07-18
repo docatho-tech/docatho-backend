@@ -1,19 +1,90 @@
-from django.shortcuts import render
-from rest_framework.views import APIView
-from rest_framework.generics import ListAPIView
-from rest_framework import permissions
-from rest_framework.response import Response
-from rest_framework import status
-from docatho_backend.providers.serializers import UserSerializer
-from docatho_backend.users.models import User
-from docatho_backend.users.helper import generate_otp
-from docatho_backend.users.models import PhoneOtp
-from rest_framework.authtoken.models import Token
-from docatho_backend.orders.models import Order
-from docatho_backend.orders.views import OrderSerializer
+from django.db.models import Count
+from django.db.models import DecimalField
+from django.db.models import Sum
+from django.db.models import Value
+from django.db.models.functions import Coalesce
+from django.http import FileResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
+from rest_framework import permissions
+from rest_framework import status
+from rest_framework.authtoken.models import Token
+from rest_framework.generics import ListAPIView
+from rest_framework.generics import ListCreateAPIView
+from rest_framework.generics import RetrieveUpdateDestroyAPIView
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from docatho_backend.masters.permissions import IsAdmin
+from docatho_backend.masters.permissions import IsProvider
+from docatho_backend.orders.analytics import REVENUE_Q
+from docatho_backend.orders.models import Order
 from docatho_backend.orders.paginators import GenericPaginationClass
+from docatho_backend.orders.views import AdminOrderSerializer
+from docatho_backend.orders.views import UpdateOrderStatusSerializer
+from docatho_backend.orders.views import _notify_status_change
+from docatho_backend.providers.models import Provider
+from docatho_backend.providers.serializers import AdminProviderCreateSerializer
+from docatho_backend.providers.serializers import AdminProviderSerializer
+from docatho_backend.providers.serializers import ProviderBankSerializer
+from docatho_backend.providers.serializers import ProviderSerializer
+from docatho_backend.providers.serializers import UserSerializer
+from docatho_backend.users.helper import generate_otp
+from docatho_backend.users.models import PhoneOtp
+from docatho_backend.users.models import User
+
+DEC = DecimalField(max_digits=14, decimal_places=2)
+ZERO = Value(0, output_field=DEC)
+
+# Status transitions a fulfilling provider is allowed to make (EP-06).
+PROVIDER_ALLOWED_STATUSES = {
+    Order.Status.APPROVED,
+    Order.Status.REJECTED,
+    Order.Status.PACKED,
+    Order.Status.OUT_FOR_DELIVERY,
+    Order.Status.DELIVERED,
+}
+
+
+def _provider_for(user) -> Provider | None:
+    return Provider.objects.filter(user=user).first()
+
+
+class AdminProviderListCreateAPIView(ListCreateAPIView):
+    """Admin: list providers (filter by ``provider_type``) and onboard new ones.
+
+    Powers the dashboard's Pharmacies directory and the order
+    "assign to pharmacy" picker (call with ``?provider_type=Chemist``).
+    """
+
+    permission_classes = [IsAdmin]
+    pagination_class = GenericPaginationClass
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ["provider_type"]
+    search_fields = ["name", "specialty", "user__name", "user__phone"]
+    queryset = Provider.objects.select_related("user").all().order_by("-created_at")
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return AdminProviderCreateSerializer
+        return AdminProviderSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = AdminProviderCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        provider = serializer.save()
+        return Response(
+            AdminProviderSerializer(provider).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminProviderDetailAPIView(RetrieveUpdateDestroyAPIView):
+    """Admin: retrieve/update/remove a single provider."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = AdminProviderSerializer
+    queryset = Provider.objects.select_related("user").all()
 
 
 class SendOTPAPIView(APIView):
@@ -23,14 +94,10 @@ class SendOTPAPIView(APIView):
     def post(self, request):
         phone = request.data.get("phone")
         try:
-            user = User.objects.get(phone=phone)
-            if not user:
-                return Response(
-                    {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND
-                )
+            User.objects.get(phone=phone)
         except User.DoesNotExist:
             return Response(
-                {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND,
             )
         otp_value = generate_otp()
         otp_obj, _ = PhoneOtp.objects.get_or_create(
@@ -53,14 +120,14 @@ class VerifyOTPAPIView(APIView):
             otp_obj = PhoneOtp.objects.get(phone_number=phone)
         except PhoneOtp.DoesNotExist:
             return Response(
-                {"detail": "OTP not found"}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "OTP not found"}, status=status.HTTP_404_NOT_FOUND,
             )
 
         try:
             user = User.objects.get(phone=phone)
         except User.DoesNotExist:
             return Response(
-                {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND,
             )
 
         if otp_obj.otp == otp:
@@ -71,62 +138,178 @@ class VerifyOTPAPIView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        else:
-            return Response(
-                {"detail": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST
-            )
+        return Response({"detail": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ChemistOrderListAPIView(ListAPIView):
-    """
-    List orders for chemists with status filtering and pagination.
-    GET /api/providers/chemist-orders/?status=placed
-    """
+    """Incoming/assigned order queue for the current provider (EP-06)."""
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsProvider]
     pagination_class = GenericPaginationClass
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["status"]
-    serializer_class = OrderSerializer
-    queryset = Order.objects.all().order_by("-placed_at")
+    serializer_class = AdminOrderSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Order.objects.none()
+        provider = _provider_for(self.request.user)
+        return (
+            Order.objects.filter(assigned_provider=provider)
+            .order_by("-placed_at")
+        )
 
 
 class ChemistOrderUpdateAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = OrderSerializer
-    queryset = Order.objects.all().order_by("-placed_at")
+    """Provider updates the fulfilment status of one of their orders (EP-06)."""
 
-    def get_object(self, pk):
-        return Order.objects.get(pk=pk)
+    permission_classes = [IsProvider]
 
     def patch(self, request, pk):
-        order = self.get_object(pk=pk)
-        serializer = OrderSerializer(order, data=request.data, partial=True)
+        provider = _provider_for(request.user)
+        order = Order.objects.filter(pk=pk, assigned_provider=provider).first()
+        if order is None:
+            return Response(
+                {"detail": "Order not found or not assigned to you."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = UpdateOrderStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        new_status = serializer.validated_data["status"]
+        if new_status not in PROVIDER_ALLOWED_STATUSES:
+            return Response(
+                {"detail": f"Providers cannot set status '{new_status}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            order.update_status(
+                new_status=new_status,
+                notes=serializer.validated_data.get("notes"),
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        _notify_status_change(order)
+        return Response(
+            AdminOrderSerializer(order, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class OrderDetailAPIView(APIView):
+    """Provider views one of their assigned orders."""
+
+    permission_classes = [IsProvider]
+
+    def get(self, request, pk):
+        provider = _provider_for(request.user)
+        order = Order.objects.filter(pk=pk, assigned_provider=provider).first()
+        if order is None:
+            return Response(
+                {"detail": "Order not found or not assigned to you."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            AdminOrderSerializer(order, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class OrderInvoiceAPIView(APIView):
+    """Provider downloads the invoice PDF for one of their assigned orders."""
+
+    permission_classes = [IsProvider]
+
+    def get(self, request, pk):
+        from docatho_backend.orders.invoices import get_or_create_invoice
+
+        provider = _provider_for(request.user)
+        order = Order.objects.filter(pk=pk, assigned_provider=provider).first()
+        if order is None:
+            return Response(
+                {"detail": "Order not found or not assigned to you."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        invoice = get_or_create_invoice(order)
+        return FileResponse(
+            invoice.pdf.open("rb"),
+            as_attachment=True,
+            filename=f"{invoice.invoice_number}.pdf",
+        )
 
 
 class UserDetailAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = UserSerializer
-    queryset = User.objects.all()
 
     def get(self, request):
-        user = request.user
-        serializer = UserSerializer(user)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(
+            UserSerializer(request.user).data, status=status.HTTP_200_OK,
+        )
 
 
-class OrderDetailAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = OrderSerializer
-    queryset = Order.objects.all()
+class ProviderProfileAPIView(APIView):
+    """GET/PATCH the current provider's profile."""
 
-    def get_object(self, pk):
-        return Order.objects.get(pk=pk)
+    permission_classes = [IsProvider]
 
-    def get(self, request, pk):
-        order = self.get_object(pk=pk)
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    def get(self, request):
+        provider = _provider_for(request.user)
+        return Response(ProviderSerializer(provider).data)
+
+    def patch(self, request):
+        provider = _provider_for(request.user)
+        serializer = ProviderSerializer(provider, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ProviderBankAPIView(APIView):
+    """GET/PATCH the current provider's bank/payout details (EP-07)."""
+
+    permission_classes = [IsProvider]
+
+    def get(self, request):
+        provider = _provider_for(request.user)
+        return Response(ProviderBankSerializer(provider).data)
+
+    def patch(self, request):
+        provider = _provider_for(request.user)
+        serializer = ProviderBankSerializer(provider, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ProviderEarningsAPIView(APIView):
+    """The current provider's earnings from delivered/paid orders (EP-07)."""
+
+    permission_classes = [IsProvider]
+
+    def get(self, request):
+        provider = _provider_for(request.user)
+        earned = (
+            Order.objects.filter(assigned_provider=provider)
+            .filter(REVENUE_Q)
+            .aggregate(
+                total_orders=Count("id"),
+                gross=Coalesce(Sum("total"), ZERO),
+                commission=Coalesce(Sum("commission_amount"), ZERO),
+                payout=Coalesce(Sum("provider_earning"), ZERO),
+            )
+        )
+        # Payout still owed for assigned orders not yet counted as revenue.
+        pending = (
+            Order.objects.filter(assigned_provider=provider)
+            .exclude(REVENUE_Q)
+            .exclude(status__in=Order.STOCK_RELEASING_STATUSES)
+            .aggregate(payout=Coalesce(Sum("provider_earning"), ZERO))
+        )
+        return Response(
+            {
+                "total_orders": earned["total_orders"],
+                "gross": earned["gross"],
+                "commission": earned["commission"],
+                "payout": earned["payout"],
+                "pending_payout": pending["payout"],
+            },
+        )

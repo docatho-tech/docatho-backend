@@ -1,22 +1,45 @@
-from django.shortcuts import render
-from uuid import uuid4
 from decimal import Decimal
+from uuid import uuid4
 
+from django.conf import settings
 from django.db import transaction as db_transaction
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
-
-from rest_framework import serializers, status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.response import Response
-
-from docatho_backend.orders.paginators import GenericPaginationClass
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
-from .models import Order, OrderItem, Transaction
-from .razorpay import RazorpayClient
-from docatho_backend.cart.models import Cart, CartItem
+from rest_framework import serializers
+from rest_framework import status
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.decorators import api_view
+from rest_framework.decorators import permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from docatho_backend.cart.models import Cart
+from docatho_backend.masters.permissions import IsAdmin
+from docatho_backend.notifications.models import NotificationType
+from docatho_backend.notifications.services import notify
+from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.users.views import AddressSerializer
+
+from .invoices import get_or_create_invoice
+from .models import Order
+from .models import OrderItem
+from .models import Prescription
+from .models import Transaction
+from .razorpay import RazorpayClient
+
+
+# --------------------------------------------------------------------------- #
+# Serializers
+# --------------------------------------------------------------------------- #
+class PrescriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Prescription
+        fields = ("id", "image", "status", "notes", "created_at")
+        read_only_fields = ("id", "status", "created_at")
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -32,6 +55,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "quantity",
             "unit_price",
             "mrp",
+            "prescription_required",
             "line_total",
         )
 
@@ -41,6 +65,9 @@ class OrderSerializer(serializers.ModelSerializer):
     address = AddressSerializer(read_only=True)
     user_name = serializers.CharField(source="user.name", read_only=True)
     user_phone = serializers.CharField(source="user.phone", read_only=True)
+    provider_name = serializers.CharField(
+        source="assigned_provider.name", read_only=True, default=None,
+    )
 
     class Meta:
         model = Order
@@ -51,8 +78,12 @@ class OrderSerializer(serializers.ModelSerializer):
             "user_name",
             "user_phone",
             "address",
+            "assigned_provider",
+            "provider_name",
+            "prescription",
             "status",
             "payment_status",
+            "payment_method",
             "subtotal",
             "total_mrp",
             "delivery_fee",
@@ -64,40 +95,29 @@ class OrderSerializer(serializers.ModelSerializer):
         )
 
 
-class AdminOrderSerializer(serializers.ModelSerializer):
-    items = OrderItemSerializer(many=True, read_only=True)
-    user_name = serializers.CharField(source="user.name", read_only=True)
-    user_phone = serializers.CharField(source="user.phone", read_only=True)
-    address = AddressSerializer(read_only=True)
+class AdminOrderSerializer(OrderSerializer):
+    """Adds fulfilment/money fields visible only to staff & providers."""
 
-    class Meta:
-        model = Order
-        fields = (
-            "id",
-            "order_number",
-            "user",
-            "user_name",
-            "user_phone",
-            "address",
-            "status",
-            "payment_status",
-            "subtotal",
-            "total_mrp",
-            "delivery_fee",
-            "discount_amount",
-            "total",
-            "placed_at",
-            "estimated_delivery_mins",
+    class Meta(OrderSerializer.Meta):
+        fields = OrderSerializer.Meta.fields + (
             "delivered_at",
-            "items",
+            "commission_rate",
+            "commission_amount",
+            "provider_earning",
+            "stock_reserved",
         )
 
 
 class CheckoutSerializer(serializers.Serializer):
-    # address_id = serializers.IntegerField(required=False)
-    # delivery fee and discount should NOT come from frontend.
-    # a fixed 15% discount is applied to all orders (see checkout logic).
+    # delivery_fee & discount are server-controlled (see checkout logic).
     notes = serializers.CharField(required=False, allow_blank=True)
+    address_id = serializers.IntegerField(required=False)
+    payment_method = serializers.ChoiceField(
+        choices=Order.PaymentMethod.choices,
+        required=False,
+        default=Order.PaymentMethod.ONLINE,
+    )
+    prescription_id = serializers.IntegerField(required=False)
 
 
 class RazorpayConfirmSerializer(serializers.Serializer):
@@ -109,6 +129,10 @@ class RazorpayConfirmSerializer(serializers.Serializer):
 class UpdateOrderStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Order.Status.choices)
     notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class AssignProviderSerializer(serializers.Serializer):
+    provider_id = serializers.IntegerField()
 
 
 class TransactionSerializer(serializers.ModelSerializer):
@@ -135,19 +159,36 @@ class TransactionSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = (
-            "id",
-            "created_at",
-            "updated_at",
-        )
+        read_only_fields = ("id", "created_at", "updated_at")
 
 
+# --------------------------------------------------------------------------- #
+# Prescriptions
+# --------------------------------------------------------------------------- #
+class PrescriptionViewSet(viewsets.ModelViewSet):
+    """Upload & list the current user's prescriptions (EP-02 Rx upload)."""
+
+    serializer_class = PrescriptionSerializer
+    permission_classes = (IsAuthenticated,)
+    http_method_names = ["get", "post", "delete", "head", "options"]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Prescription.objects.none()
+        return Prescription.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+# --------------------------------------------------------------------------- #
+# Orders (patient-facing)
+# --------------------------------------------------------------------------- #
 class OrderViewSet(viewsets.ViewSet):
     permission_classes = (IsAuthenticated,)
 
     def list(self, request):
         qs = Order.objects.filter(user=request.user).order_by("-placed_at")
-        page = self.request.query_params.get("page")
         serializer = OrderSerializer(qs, many=True, context={"request": request})
         return Response(serializer.data)
 
@@ -158,14 +199,10 @@ class OrderViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["patch"], url_path="update-status")
     def update_status(self, request, pk=None):
-        """
-        Update the status of an order.
-        PATCH /api/orders/<pk>/update-status/  { status, notes (optional) }
-        """
+        """Customer-initiated status changes (e.g. cancel their own order)."""
         order = get_object_or_404(Order, pk=pk, user=request.user)
         serializer = UpdateOrderStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         try:
             order.update_status(
                 new_status=serializer.validated_data["status"],
@@ -173,95 +210,163 @@ class OrderViewSet(viewsets.ViewSet):
             )
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            OrderSerializer(order, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
-        # Return updated order
-        response_serializer = OrderSerializer(order, context={"request": request})
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
+    @action(detail=True, methods=["get"])
+    def invoice(self, request, pk=None):
+        """Download the order's invoice PDF (EP-03)."""
+        order = get_object_or_404(Order, pk=pk, user=request.user)
+        invoice = get_or_create_invoice(order)
+        return FileResponse(
+            invoice.pdf.open("rb"),
+            as_attachment=True,
+            filename=f"{invoice.invoice_number}.pdf",
+            content_type="application/pdf",
+        )
 
     @action(detail=False, methods=["post"])
     def checkout(self, request):
-        """
-        Create an Order from the user's open Cart and create a Razorpay order.
-        Returns Razorpay order payload to use on client for checkout.
+        """Create an Order from the user's Cart.
 
-        Business rules:
-         - delivery_fee is 0 (server controlled)
-         - a fixed 15% discount (of subtotal) is applied to all orders
+        Enforces the prescription gate, supports online (Razorpay) and COD, and
+        applies server-controlled delivery fee, discount and commission split.
         """
         serializer = CheckoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        payment_method = data.get("payment_method", Order.PaymentMethod.ONLINE)
 
         cart = Cart.objects.filter(user=request.user).first()
         if not cart or not cart.items.exists():
             return Response(
-                {"detail": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST,
             )
 
+        cart_items = list(cart.items.select_related("medicine").all())
+
+        # --- Prescription gate -------------------------------------------- #
+        rx_items = [ci for ci in cart_items if ci.medicine.is_prescription_required]
+        prescription = None
+        if rx_items:
+            prescription_id = data.get("prescription_id")
+            if not prescription_id:
+                return Response(
+                    {
+                        "detail": "A prescription is required for one or more items "
+                        "in your cart.",
+                        "prescription_required_for": [
+                            ci.medicine.name for ci in rx_items
+                        ],
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            prescription = Prescription.objects.filter(
+                pk=prescription_id, user=request.user,
+            ).first()
+            if prescription is None:
+                return Response(
+                    {"detail": "Invalid prescription."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # --- Stock availability (soft check before creating the order) ---- #
+        shortages = [
+            ci.medicine.name
+            for ci in cart_items
+            if ci.medicine.stock < ci.quantity
+        ]
+        if shortages:
+            return Response(
+                {"detail": "Out of stock", "items": shortages},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- Resolve delivery address ------------------------------------- #
+        address = request.user.address
+        address_id = data.get("address_id")
+        if address_id:
+            from docatho_backend.users.models import Address
+
+            address = Address.objects.filter(pk=address_id, user=request.user).first()
+            if address is None:
+                return Response(
+                    {"detail": "Invalid address."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         with db_transaction.atomic():
-            # create order (initial totals will be recalculated later)
-            order_number = f"ORD{uuid4().hex[:12].upper()}"
-            address = request.user.address
             order = Order.objects.create(
-                order_number=order_number,
+                order_number=f"ORD{uuid4().hex[:12].upper()}",
                 user=request.user,
                 address=address,
-                delivery_fee=Decimal("0.00"),  # server controlled
+                prescription=prescription,
+                payment_method=payment_method,
+                delivery_fee=Decimal("0.00"),
                 discount_amount=Decimal("0.00"),
                 notes=data.get("notes", "") or "",
             )
 
-            # move cart items into order items (snapshot prices)
-            for it in cart.items.select_related("medicine").all():
+            for ci in cart_items:
                 OrderItem.objects.create(
                     order=order,
-                    medicine=it.medicine,
-                    quantity=it.quantity,
-                    unit_price=it.unit_price,
-                    mrp=it.mrp,
-                    prescription_required=False,
+                    medicine=ci.medicine,
+                    quantity=ci.quantity,
+                    unit_price=ci.unit_price,
+                    mrp=ci.mrp,
+                    prescription_required=ci.medicine.is_prescription_required,
                 )
 
-            # recalc totals to compute subtotal
             order.recalc_totals()
 
-            # apply fixed 15% discount on subtotal (server-side rule)
-            discount_percent = Decimal("15.0")
+            # Server-controlled money rules.
+            discount_percent = Decimal(str(settings.PHARMACY_ORDER_DISCOUNT_PERCENT))
             discount_amount = (
                 order.subtotal * (discount_percent / Decimal("100"))
             ).quantize(Decimal("0.01"))
-            # ensure discount does not exceed subtotal
-            if discount_amount > order.subtotal:
-                discount_amount = order.subtotal
-            order.discount_amount = discount_amount
-            order.delivery_fee = Decimal("0.00")
+            order.discount_amount = min(discount_amount, order.subtotal)
+            order.delivery_fee = Decimal(str(settings.PHARMACY_DELIVERY_FEE)).quantize(
+                Decimal("0.01"),
+            )
             order.recalc_totals()
+            order.compute_commission()
 
-            # create razorpay order
-            client = RazorpayClient()
-            try:
-                rp_order = client.create_order(order)
-            except Exception as exc:
-                return Response(
-                    {"detail": "failed to create razorpay order", "error": str(exc)},
-                    status=status.HTTP_502_BAD_GATEWAY,
-                )
+            if payment_method == Order.PaymentMethod.COD:
+                # COD commits immediately: deduct stock and empty the cart.
+                try:
+                    order.reserve_stock()
+                except ValueError as exc:
+                    return Response(
+                        {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST,
+                    )
+                cart.clear()
+                rp_order = None
+            else:
+                # Online: create Razorpay order; stock is reserved on payment
+                # confirmation so abandoned carts don't hold inventory.
+                client = RazorpayClient()
+                try:
+                    rp_order = client.create_order(order)
+                except Exception as exc:  # network / gateway error
+                    raise serializers.ValidationError(
+                        {"detail": "failed to create razorpay order", "error": str(exc)},
+                    ) from exc
 
-            cart.save(update_fields=["updated_at"])
+        _notify_order_placed(order)
 
-        # return order + razorpay payload (client will use rp_order['id'] etc)
-        out = {
-            "order": OrderSerializer(order, context={"request": request}).data,
-            "razorpay_order": rp_order,
-        }
-        return Response(out, status=status.HTTP_201_CREATED)
+        return Response(
+            {
+                "order": OrderSerializer(order, context={"request": request}).data,
+                "razorpay_order": rp_order,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=False, methods=["post"], url_path="confirm-payment")
     def confirm_payment(self, request):
-        """
-        Confirm payment after client-side checkout.
-        Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature }
-        """
+        """Confirm a Razorpay payment, reserve stock and empty the cart."""
         serializer = RazorpayConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         d = serializer.validated_data
@@ -282,19 +387,31 @@ class OrderViewSet(viewsets.ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # empty the user's cart on successful payment
         if tr.succeeded:
+            order = tr.order
             try:
-                cart = Cart.objects.filter(user=tr.order.user).first()
+                order.reserve_stock()
+            except ValueError:
+                # Payment already captured; flag the shortage for ops instead of
+                # failing the confirmation.
+                order.update_status(
+                    Order.Status.PROCESSING,
+                    notes="Stock shortage after payment; needs manual review.",
+                )
+            try:
+                cart = Cart.objects.filter(user=order.user).first()
                 if cart and cart.items.exists():
-                    with db_transaction.atomic():
-                        cart.items.all().delete()
-                        cart.save(update_fields=["updated_at"])
+                    cart.clear()
             except Exception:
-                # Do not block payment confirmation response if cart clearing fails
                 pass
+            notify(
+                order.user,
+                NotificationType.PAYMENT,
+                "Payment received",
+                f"We received your payment for order {order.order_number}.",
+                order=order,
+            )
 
-        # return transaction + order state
         return Response(
             {
                 "transaction": {
@@ -305,68 +422,59 @@ class OrderViewSet(viewsets.ViewSet):
                     "paid_at": tr.paid_at,
                 },
                 "order": OrderSerializer(tr.order, context={"request": request}).data,
-            }
+            },
         )
+
+
+def _notify_order_placed(order: Order) -> None:
+    notify(
+        order.user,
+        NotificationType.ORDER_PLACED,
+        "Order placed",
+        f"Your order {order.order_number} has been placed.",
+        order=order,
+    )
 
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def razorpay_webhook(request):
-    """
-    Public webhook endpoint for Razorpay.
-    Set webhook secret in settings.RAZORPAY_WEBHOOK_SECRET.
-    """
-    signature = request.META.get("HTTP_X_RAZORPAY_SIGNATURE") or request.META.get(
-        "HTTP_X_RAZORPAY_SIGNATURE".lower()
-    )
+    """Public webhook endpoint for Razorpay."""
+    signature = request.META.get("HTTP_X_RAZORPAY_SIGNATURE")
     body = request.body or b""
     client = RazorpayClient()
     try:
         payload = client.handle_webhook(body, signature)
     except ValueError:
         return Response(
-            {"detail": "invalid signature"}, status=status.HTTP_400_BAD_REQUEST
+            {"detail": "invalid signature"}, status=status.HTTP_400_BAD_REQUEST,
         )
     except Exception as exc:
         return Response(
-            {"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            {"detail": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
-    # always return 200 for valid handling
     return Response({"status": "ok", "event": payload.get("event")})
 
 
+# --------------------------------------------------------------------------- #
+# Admin order management (EP-10) & money (EP-11)
+# --------------------------------------------------------------------------- #
 class AdminOrderList(viewsets.ReadOnlyModelViewSet):
-    """
-    Viewset for admin users to list and retrieve all orders.
-    """
+    """Admin: list/retrieve all orders, update status, assign providers."""
 
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAdmin,)
     pagination_class = GenericPaginationClass
     serializer_class = AdminOrderSerializer
     filter_backends = (DjangoFilterBackend, filters.SearchFilter)
-    filterset_fields = ["status", "payment_status"]
+    filterset_fields = ["status", "payment_status", "payment_method", "assigned_provider"]
     search_fields = ["order_number", "user__name", "user__phone"]
     queryset = Order.objects.all().order_by("-placed_at")
 
-    def get_permissions(self):
-        permissions = super().get_permissions()
-        if not self.request.user.is_staff:
-            self.permission_denied(
-                self.request, message="User does not have admin privileges."
-            )
-        return permissions
-
     @action(detail=True, methods=["patch"], url_path="update-status")
     def update_status(self, request, pk=None):
-        """
-        Update the status of an order (admin only).
-        PATCH /api/admin/orders/<pk>/update-status/  { status, notes (optional) }
-        """
         order = get_object_or_404(Order, pk=pk)
         serializer = UpdateOrderStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         try:
             order.update_status(
                 new_status=serializer.validated_data["status"],
@@ -374,50 +482,64 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
             )
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Return updated order
-        response_serializer = AdminOrderSerializer(order, context={"request": request})
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
-
-
-class TransactionSerializer(serializers.ModelSerializer):
-    order_number = serializers.CharField(source="order.order_number", read_only=True)
-    order_id = serializers.IntegerField(source="order.id", read_only=True)
-    user_name = serializers.CharField(source="order.user.name", read_only=True)
-    user_phone = serializers.CharField(source="order.user.phone", read_only=True)
-
-    class Meta:
-        model = Transaction
-        fields = (
-            "id",
-            "order_id",
-            "order_number",
-            "user_name",
-            "user_phone",
-            "provider",
-            "payment_method",
-            "transaction_order_id",
-            "razorpay_payment_id",
-            "amount",
-            "succeeded",
-            "paid_at",
-            "created_at",
-            "updated_at",
+        _notify_status_change(order)
+        return Response(
+            AdminOrderSerializer(order, context={"request": request}).data,
+            status=status.HTTP_200_OK,
         )
-        read_only_fields = (
-            "id",
-            "created_at",
-            "updated_at",
+
+    @action(detail=True, methods=["patch"], url_path="assign-provider")
+    def assign_provider(self, request, pk=None):
+        from docatho_backend.providers.models import Provider
+
+        order = get_object_or_404(Order, pk=pk)
+        serializer = AssignProviderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        provider = get_object_or_404(
+            Provider, pk=serializer.validated_data["provider_id"],
+        )
+        order.assigned_provider = provider
+        order.save(update_fields=["assigned_provider", "updated_at"])
+        if provider.user_id:
+            notify(
+                provider.user,
+                NotificationType.GENERIC,
+                "New order assigned",
+                f"Order {order.order_number} has been assigned to you.",
+                order=order,
+            )
+        return Response(
+            AdminOrderSerializer(order, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+def _notify_status_change(order: Order) -> None:
+    mapping = {
+        Order.Status.APPROVED: (NotificationType.ORDER_APPROVED, "Order approved"),
+        Order.Status.REJECTED: (NotificationType.ORDER_REJECTED, "Order rejected"),
+        Order.Status.PACKED: (NotificationType.ORDER_PACKED, "Order packed"),
+        Order.Status.OUT_FOR_DELIVERY: (
+            NotificationType.OUT_FOR_DELIVERY,
+            "Out for delivery",
+        ),
+        Order.Status.DELIVERED: (NotificationType.ORDER_DELIVERED, "Order delivered"),
+        Order.Status.CANCELLED: (NotificationType.ORDER_CANCELLED, "Order cancelled"),
+    }
+    entry = mapping.get(order.status)
+    if entry:
+        ntype, title = entry
+        notify(
+            order.user,
+            ntype,
+            title,
+            f"Order {order.order_number}: {title.lower()}.",
+            order=order,
         )
 
 
 class TransactionListView(viewsets.ReadOnlyModelViewSet):
-    """
-    Viewset for listing transactions with pagination (10 per page).
-    GET /api/transactions/ - list all transactions
-    - Regular users: only their own transactions
-    - Admin users: all transactions
-    """
+    """Transactions: own for customers, all for staff (EP-11 reports)."""
 
     permission_classes = (IsAuthenticated,)
     pagination_class = GenericPaginationClass
@@ -432,15 +554,7 @@ class TransactionListView(viewsets.ReadOnlyModelViewSet):
     queryset = Transaction.objects.all().order_by("-paid_at", "-created_at")
 
     def get_queryset(self):
-        """
-        Filter transactions based on user permissions.
-        - Regular users can only see transactions for their own orders
-        - Admin users can see all transactions
-        """
         queryset = super().get_queryset()
-
-        # If user is not staff, filter to only their orders' transactions
         if not self.request.user.is_staff:
             queryset = queryset.filter(order__user=self.request.user)
-
         return queryset

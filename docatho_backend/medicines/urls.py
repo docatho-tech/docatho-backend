@@ -1,11 +1,8 @@
-from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from docatho_backend.medicines.views import (
-    CategoryViewset,
-    MedicineViewset,
-    AdminMedicineViewset,
-)
+from docatho_backend.medicines.views import AdminMedicineViewset
+from docatho_backend.medicines.views import CategoryViewset
+from docatho_backend.medicines.views import MedicineViewset
 
 app_name = "medicines"
 router = DefaultRouter()

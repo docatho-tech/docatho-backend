@@ -1,0 +1,2827 @@
+openapi: 3.0.3
+info:
+  title: docatho_backend API
+  version: 1.0.0
+  description: Documentation of API endpoints of docatho_backend
+paths:
+  /api/{id}/detail/:
+    get:
+      operationId: detail_retrieve
+      description: |-
+        GET /api/users/<pk>/detail/ - get detailed user information
+        Returns user info, address, and all orders with complete order details.
+        Requires authentication. Users can view their own details, admins can view any user.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - detail
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/addresses/:
+    get:
+      operationId: addresses_retrieve
+      description: |-
+        Address collection for the current user.
+
+        * GET  /api/addresses/ - list the user's addresses (default first)
+        * POST /api/addresses/ - create an address for the user
+
+        The model's ``save()`` guarantees a single default per user, so no manual
+        default-unsetting is needed here.
+      tags:
+      - addresses
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: addresses_create
+      description: |-
+        Address collection for the current user.
+
+        * GET  /api/addresses/ - list the user's addresses (default first)
+        * POST /api/addresses/ - create an address for the user
+
+        The model's ``save()`` guarantees a single default per user, so no manual
+        default-unsetting is needed here.
+      tags:
+      - addresses
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/addresses/{id}/:
+    get:
+      operationId: addresses_retrieve_2
+      description: |-
+        Single address owned by the current user.
+
+        * GET    /api/addresses/<pk>/ - retrieve
+        * PATCH  /api/addresses/<pk>/ - partial update (incl. set is_default)
+        * DELETE /api/addresses/<pk>/ - delete
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - addresses
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+    patch:
+      operationId: addresses_partial_update
+      description: |-
+        Single address owned by the current user.
+
+        * GET    /api/addresses/<pk>/ - retrieve
+        * PATCH  /api/addresses/<pk>/ - partial update (incl. set is_default)
+        * DELETE /api/addresses/<pk>/ - delete
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - addresses
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+    delete:
+      operationId: addresses_destroy
+      description: |-
+        Single address owned by the current user.
+
+        * GET    /api/addresses/<pk>/ - retrieve
+        * PATCH  /api/addresses/<pk>/ - partial update (incl. set is_default)
+        * DELETE /api/addresses/<pk>/ - delete
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - addresses
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/admin-login/:
+    post:
+      operationId: admin_login_create
+      tags:
+      - admin-login
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/admin/orders/:
+    get:
+      operationId: admin_orders_list
+      description: 'Admin: list/retrieve all orders, update status, assign providers.'
+      parameters:
+      - in: query
+        name: assigned_provider
+        schema:
+          type: integer
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: payment_method
+        schema:
+          type: string
+          enum:
+          - cod
+          - online
+        description: |-
+          * `online` - Online (Razorpay)
+          * `cod` - Cash on delivery
+      - in: query
+        name: payment_status
+        schema:
+          type: string
+          enum:
+          - failed
+          - paid
+          - pending
+          - refunded
+        description: |-
+          * `pending` - Pending
+          * `paid` - Paid
+          * `failed` - Failed
+          * `refunded` - Refunded
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - approved
+          - cancelled
+          - confirmed
+          - delivered
+          - out_for_delivery
+          - packed
+          - placed
+          - processing
+          - rejected
+          - returned
+        description: |-
+          * `placed` - Placed
+          * `approved` - Approved
+          * `rejected` - Rejected
+          * `packed` - Packed
+          * `confirmed` - Confirmed
+          * `processing` - Processing
+          * `out_for_delivery` - Out for delivery
+          * `delivered` - Delivered
+          * `cancelled` - Cancelled
+          * `returned` - Returned
+      tags:
+      - admin
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAdminOrderList'
+          description: ''
+  /api/admin/orders/{id}/:
+    get:
+      operationId: admin_orders_retrieve
+      description: 'Admin: list/retrieve all orders, update status, assign providers.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this order.
+        required: true
+      tags:
+      - admin
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOrder'
+          description: ''
+  /api/admin/orders/{id}/assign-provider/:
+    patch:
+      operationId: admin_orders_assign_provider_partial_update
+      description: 'Admin: list/retrieve all orders, update status, assign providers.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this order.
+        required: true
+      tags:
+      - admin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminOrder'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminOrder'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminOrder'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOrder'
+          description: ''
+  /api/admin/orders/{id}/update-status/:
+    patch:
+      operationId: admin_orders_update_status_partial_update
+      description: 'Admin: list/retrieve all orders, update status, assign providers.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this order.
+        required: true
+      tags:
+      - admin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminOrder'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminOrder'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminOrder'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOrder'
+          description: ''
+  /api/analytics/payouts/:
+    get:
+      operationId: analytics_payouts_retrieve
+      description: |-
+        GET /api/analytics/payouts/ — provider payout summary (EP-07/EP-11).
+
+        Admins see all providers; a provider sees only their own totals.
+      tags:
+      - analytics
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/analytics/revenue/:
+    get:
+      operationId: analytics_revenue_retrieve
+      description: GET /api/analytics/revenue/ — totals + per-period breakdown (admin).
+      tags:
+      - analytics
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/analytics/revenue/export/:
+    get:
+      operationId: analytics_revenue_export_retrieve
+      description: GET /api/analytics/revenue/export/ — CSV of revenue orders (admin).
+      tags:
+      - analytics
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/analytics/sales/:
+    get:
+      operationId: analytics_sales_retrieve
+      description: GET /api/analytics/sales/ — top medicines & categories (admin,
+        EP-12).
+      tags:
+      - analytics
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/auth-token/:
+    post:
+      operationId: auth_token_create
+      tags:
+      - auth-token
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AuthToken'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AuthToken'
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthToken'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthToken'
+          description: ''
+  /api/cart/:
+    get:
+      operationId: cart_retrieve
+      description: |-
+        Simple Cart API:
+        - GET    /api/cart/            -> current open cart
+        - POST   /api/cart/add/        -> add item {medicine_id, quantity}
+        - PATCH  /api/cart/update/     -> update item quantity {medicine_id, quantity}
+        - POST   /api/cart/remove/     -> remove item {medicine_id}
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cart/{id}/:
+    get:
+      operationId: cart_retrieve_2
+      description: |-
+        Simple Cart API:
+        - GET    /api/cart/            -> current open cart
+        - POST   /api/cart/add/        -> add item {medicine_id, quantity}
+        - PATCH  /api/cart/update/     -> update item quantity {medicine_id, quantity}
+        - POST   /api/cart/remove/     -> remove item {medicine_id}
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cart/add/:
+    post:
+      operationId: cart_add_create
+      description: |-
+        Simple Cart API:
+        - GET    /api/cart/            -> current open cart
+        - POST   /api/cart/add/        -> add item {medicine_id, quantity}
+        - PATCH  /api/cart/update/     -> update item quantity {medicine_id, quantity}
+        - POST   /api/cart/remove/     -> remove item {medicine_id}
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cart/clear/:
+    post:
+      operationId: cart_clear_create
+      description: Empty the current user's cart. POST /api/cart/clear/
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cart/get_cart_items_count/:
+    get:
+      operationId: cart_get_cart_items_count_retrieve
+      description: |-
+        Simple Cart API:
+        - GET    /api/cart/            -> current open cart
+        - POST   /api/cart/add/        -> add item {medicine_id, quantity}
+        - PATCH  /api/cart/update/     -> update item quantity {medicine_id, quantity}
+        - POST   /api/cart/remove/     -> remove item {medicine_id}
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cart/remove-item/:
+    post:
+      operationId: cart_remove_item_create
+      description: |-
+        Remove an item from the cart.
+        POST /api/cart/remove-item/  { medicine_id }
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cart/update-item/:
+    patch:
+      operationId: cart_update_item_partial_update
+      description: |-
+        Update quantity for an item in the cart.
+        PATCH /api/cart/update-item/  { medicine_id, quantity }
+      tags:
+      - cart
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/dashboard/:
+    get:
+      operationId: dashboard_retrieve
+      tags:
+      - dashboard
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/medicines/:
+    get:
+      operationId: medicines_list
+      description: Patient/browse-facing catalogue. Public reads, admin-only writes.
+      parameters:
+      - in: query
+        name: category
+        schema:
+          type: array
+          items:
+            type: integer
+        explode: true
+        style: form
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - in: query
+        name: is_prescription_required
+        schema:
+          type: boolean
+      - in: query
+        name: name
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: schedule
+        schema:
+          type: string
+          enum:
+          - H
+          - H1
+          - OTC
+          - X
+        description: |-
+          Drug schedule classification; H/H1/X require a prescription.
+
+          * `OTC` - Over the counter
+          * `H` - Schedule H
+          * `H1` - Schedule H1
+          * `X` - Schedule X
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMedicineList'
+          description: ''
+    post:
+      operationId: medicines_create
+      description: Patient/browse-facing catalogue. Public reads, admin-only writes.
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+  /api/medicines/{id}/:
+    get:
+      operationId: medicines_retrieve
+      description: Patient/browse-facing catalogue. Public reads, admin-only writes.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+    put:
+      operationId: medicines_update
+      description: Patient/browse-facing catalogue. Public reads, admin-only writes.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+    patch:
+      operationId: medicines_partial_update
+      description: Patient/browse-facing catalogue. Public reads, admin-only writes.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMedicine'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMedicine'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMedicine'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+    delete:
+      operationId: medicines_destroy
+      description: Patient/browse-facing catalogue. Public reads, admin-only writes.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/medicines/categories/:
+    get:
+      operationId: medicines_categories_list
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - in: query
+        name: name
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCategoryList'
+          description: ''
+    post:
+      operationId: medicines_categories_create
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Category'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Category'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Category'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+  /api/medicines/categories/{id}/:
+    get:
+      operationId: medicines_categories_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this category.
+        required: true
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    put:
+      operationId: medicines_categories_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this category.
+        required: true
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Category'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Category'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Category'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    patch:
+      operationId: medicines_categories_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this category.
+        required: true
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    delete:
+      operationId: medicines_categories_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this category.
+        required: true
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/medicines/list/admin/:
+    get:
+      operationId: medicines_list_admin_list
+      description: Admin catalogue management (EP-09). Staff only, all methods.
+      parameters:
+      - in: query
+        name: category
+        schema:
+          type: array
+          items:
+            type: integer
+        explode: true
+        style: form
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - in: query
+        name: is_prescription_required
+        schema:
+          type: boolean
+      - in: query
+        name: name
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: schedule
+        schema:
+          type: string
+          enum:
+          - H
+          - H1
+          - OTC
+          - X
+        description: |-
+          Drug schedule classification; H/H1/X require a prescription.
+
+          * `OTC` - Over the counter
+          * `H` - Schedule H
+          * `H1` - Schedule H1
+          * `X` - Schedule X
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMedicineList'
+          description: ''
+    post:
+      operationId: medicines_list_admin_create
+      description: Admin catalogue management (EP-09). Staff only, all methods.
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+  /api/medicines/list/admin/{id}/:
+    get:
+      operationId: medicines_list_admin_retrieve
+      description: Admin catalogue management (EP-09). Staff only, all methods.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+    put:
+      operationId: medicines_list_admin_update
+      description: Admin catalogue management (EP-09). Staff only, all methods.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Medicine'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+    patch:
+      operationId: medicines_list_admin_partial_update
+      description: Admin catalogue management (EP-09). Staff only, all methods.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMedicine'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMedicine'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMedicine'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Medicine'
+          description: ''
+    delete:
+      operationId: medicines_list_admin_destroy
+      description: Admin catalogue management (EP-09). Staff only, all methods.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this medicine.
+        required: true
+      tags:
+      - medicines
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/notifications/:
+    get:
+      operationId: notifications_list
+      description: |-
+        The current user's notifications.
+
+        * GET  /api/notifications/                 - list (own only)
+        * GET  /api/notifications/{pk}/            - retrieve (own only)
+        * GET  /api/notifications/unread_count/    - unread badge count
+        * POST /api/notifications/{pk}/mark_read/  - mark one read
+        * POST /api/notifications/mark_all_read/   - mark all read
+      parameters:
+      - in: query
+        name: is_read
+        schema:
+          type: boolean
+      - in: query
+        name: notification_type
+        schema:
+          type: string
+          enum:
+          - generic
+          - order_approved
+          - order_cancelled
+          - order_delivered
+          - order_packed
+          - order_placed
+          - order_rejected
+          - out_for_delivery
+          - payment
+        description: |-
+          * `order_placed` - Order placed
+          * `order_approved` - Order approved
+          * `order_rejected` - Order rejected
+          * `order_packed` - Order packed
+          * `out_for_delivery` - Out for delivery
+          * `order_delivered` - Order delivered
+          * `order_cancelled` - Order cancelled
+          * `payment` - Payment update
+          * `generic` - Notification
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - notifications
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNotificationList'
+          description: ''
+  /api/notifications/{id}/:
+    get:
+      operationId: notifications_retrieve
+      description: |-
+        The current user's notifications.
+
+        * GET  /api/notifications/                 - list (own only)
+        * GET  /api/notifications/{pk}/            - retrieve (own only)
+        * GET  /api/notifications/unread_count/    - unread badge count
+        * POST /api/notifications/{pk}/mark_read/  - mark one read
+        * POST /api/notifications/mark_all_read/   - mark all read
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this notification.
+        required: true
+      tags:
+      - notifications
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /api/notifications/{id}/mark_read/:
+    post:
+      operationId: notifications_mark_read_create
+      description: |-
+        The current user's notifications.
+
+        * GET  /api/notifications/                 - list (own only)
+        * GET  /api/notifications/{pk}/            - retrieve (own only)
+        * GET  /api/notifications/unread_count/    - unread badge count
+        * POST /api/notifications/{pk}/mark_read/  - mark one read
+        * POST /api/notifications/mark_all_read/   - mark all read
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this notification.
+        required: true
+      tags:
+      - notifications
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Notification'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Notification'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Notification'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /api/notifications/mark_all_read/:
+    post:
+      operationId: notifications_mark_all_read_create
+      description: |-
+        The current user's notifications.
+
+        * GET  /api/notifications/                 - list (own only)
+        * GET  /api/notifications/{pk}/            - retrieve (own only)
+        * GET  /api/notifications/unread_count/    - unread badge count
+        * POST /api/notifications/{pk}/mark_read/  - mark one read
+        * POST /api/notifications/mark_all_read/   - mark all read
+      tags:
+      - notifications
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Notification'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Notification'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Notification'
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /api/notifications/unread_count/:
+    get:
+      operationId: notifications_unread_count_retrieve
+      description: |-
+        The current user's notifications.
+
+        * GET  /api/notifications/                 - list (own only)
+        * GET  /api/notifications/{pk}/            - retrieve (own only)
+        * GET  /api/notifications/unread_count/    - unread badge count
+        * POST /api/notifications/{pk}/mark_read/  - mark one read
+        * POST /api/notifications/mark_all_read/   - mark all read
+      tags:
+      - notifications
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /api/orders/:
+    get:
+      operationId: orders_retrieve
+      tags:
+      - orders
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/orders/{id}/:
+    get:
+      operationId: orders_retrieve_2
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - orders
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/orders/{id}/invoice/:
+    get:
+      operationId: orders_invoice_retrieve
+      description: Download the order's invoice PDF (EP-03).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - orders
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/orders/{id}/update-status/:
+    patch:
+      operationId: orders_update_status_partial_update
+      description: Customer-initiated status changes (e.g. cancel their own order).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - orders
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/orders/checkout/:
+    post:
+      operationId: orders_checkout_create
+      description: |-
+        Create an Order from the user's Cart.
+
+        Enforces the prescription gate, supports online (Razorpay) and COD, and
+        applies server-controlled delivery fee, discount and commission split.
+      tags:
+      - orders
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/orders/confirm-payment/:
+    post:
+      operationId: orders_confirm_payment_create
+      description: Confirm a Razorpay payment, reserve stock and empty the cart.
+      tags:
+      - orders
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/prescriptions/:
+    get:
+      operationId: prescriptions_list
+      description: Upload & list the current user's prescriptions (EP-02 Rx upload).
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - prescriptions
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Prescription'
+          description: ''
+    post:
+      operationId: prescriptions_create
+      description: Upload & list the current user's prescriptions (EP-02 Rx upload).
+      tags:
+      - prescriptions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Prescription'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Prescription'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Prescription'
+        required: true
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Prescription'
+          description: ''
+  /api/prescriptions/{id}/:
+    get:
+      operationId: prescriptions_retrieve
+      description: Upload & list the current user's prescriptions (EP-02 Rx upload).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this prescription.
+        required: true
+      tags:
+      - prescriptions
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Prescription'
+          description: ''
+    delete:
+      operationId: prescriptions_destroy
+      description: Upload & list the current user's prescriptions (EP-02 Rx upload).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this prescription.
+        required: true
+      tags:
+      - prescriptions
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/profile/:
+    get:
+      operationId: profile_retrieve
+      tags:
+      - profile
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/bank/:
+    get:
+      operationId: providers_bank_retrieve
+      description: GET/PATCH the current provider's bank/payout details (EP-07).
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+    patch:
+      operationId: providers_bank_partial_update
+      description: GET/PATCH the current provider's bank/payout details (EP-07).
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/chemist-order-list/:
+    get:
+      operationId: providers_chemist_order_list_list
+      description: Incoming/assigned order queue for the current provider (EP-06).
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - approved
+          - cancelled
+          - confirmed
+          - delivered
+          - out_for_delivery
+          - packed
+          - placed
+          - processing
+          - rejected
+          - returned
+        description: |-
+          * `placed` - Placed
+          * `approved` - Approved
+          * `rejected` - Rejected
+          * `packed` - Packed
+          * `confirmed` - Confirmed
+          * `processing` - Processing
+          * `out_for_delivery` - Out for delivery
+          * `delivered` - Delivered
+          * `cancelled` - Cancelled
+          * `returned` - Returned
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAdminOrderList'
+          description: ''
+  /api/providers/chemist-order-update/{id}/:
+    patch:
+      operationId: providers_chemist_order_update_partial_update
+      description: Provider updates the fulfilment status of one of their orders (EP-06).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/earnings/:
+    get:
+      operationId: providers_earnings_retrieve
+      description: The current provider's earnings from delivered/paid orders (EP-07).
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/order-detail/{id}/:
+    get:
+      operationId: providers_order_detail_retrieve
+      description: Provider views one of their assigned orders.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/profile/:
+    get:
+      operationId: providers_profile_retrieve
+      description: GET/PATCH the current provider's profile.
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+    patch:
+      operationId: providers_profile_partial_update
+      description: GET/PATCH the current provider's profile.
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/send-otp/:
+    post:
+      operationId: providers_send_otp_create
+      tags:
+      - providers
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/providers/user-detail/:
+    get:
+      operationId: providers_user_detail_retrieve
+      tags:
+      - providers
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/providers/verify-otp/:
+    post:
+      operationId: providers_verify_otp_create
+      tags:
+      - providers
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/register/:
+    post:
+      operationId: register_create
+      tags:
+      - register
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/schema/:
+    get:
+      operationId: schema_retrieve
+      description: |-
+        OpenApi3 schema for this API. Format can be selected via content negotiation.
+
+        - YAML: application/vnd.oai.openapi
+        - JSON: application/vnd.oai.openapi+json
+      parameters:
+      - in: query
+        name: format
+        schema:
+          type: string
+          enum:
+          - json
+          - yaml
+      - in: query
+        name: lang
+        schema:
+          type: string
+          enum:
+          - af
+          - ar
+          - ar-dz
+          - ast
+          - az
+          - be
+          - bg
+          - bn
+          - br
+          - bs
+          - ca
+          - ckb
+          - cs
+          - cy
+          - da
+          - de
+          - dsb
+          - el
+          - en
+          - en-au
+          - en-gb
+          - eo
+          - es
+          - es-ar
+          - es-co
+          - es-mx
+          - es-ni
+          - es-ve
+          - et
+          - eu
+          - fa
+          - fi
+          - fr
+          - fy
+          - ga
+          - gd
+          - gl
+          - he
+          - hi
+          - hr
+          - hsb
+          - hu
+          - hy
+          - ia
+          - id
+          - ig
+          - io
+          - is
+          - it
+          - ja
+          - ka
+          - kab
+          - kk
+          - km
+          - kn
+          - ko
+          - ky
+          - lb
+          - lt
+          - lv
+          - mk
+          - ml
+          - mn
+          - mr
+          - ms
+          - my
+          - nb
+          - ne
+          - nl
+          - nn
+          - os
+          - pa
+          - pl
+          - pt
+          - pt-br
+          - ro
+          - ru
+          - sk
+          - sl
+          - sq
+          - sr
+          - sr-latn
+          - sv
+          - sw
+          - ta
+          - te
+          - tg
+          - th
+          - tk
+          - tr
+          - tt
+          - udm
+          - ug
+          - uk
+          - ur
+          - uz
+          - vi
+          - zh-hans
+          - zh-hant
+      tags:
+      - schema
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/vnd.oai.openapi:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/yaml:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/vnd.oai.openapi+json:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/send-otp/:
+    post:
+      operationId: send_otp_create
+      tags:
+      - send-otp
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/transactions/:
+    get:
+      operationId: transactions_list
+      description: 'Transactions: own for customers, all for staff (EP-11 reports).'
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: payment_method
+        schema:
+          type: string
+      - in: query
+        name: provider
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: succeeded
+        schema:
+          type: boolean
+      tags:
+      - transactions
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTransactionList'
+          description: ''
+  /api/transactions/{id}/:
+    get:
+      operationId: transactions_retrieve
+      description: 'Transactions: own for customers, all for staff (EP-11 reports).'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this transaction.
+        required: true
+      tags:
+      - transactions
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+          description: ''
+  /api/update-profile/:
+    patch:
+      operationId: update_profile_partial_update
+      description: PATCH /api/users/update-profile/  - update current user's profile
+        fields (except phone/email)
+      tags:
+      - update-profile
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/users/list/:
+    get:
+      operationId: users_list_retrieve
+      description: |-
+        GET /api/users/list/ - list all users in the database
+        Requires authentication. Admin users can see all users.
+      tags:
+      - users
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/verify-otp/:
+    post:
+      operationId: verify_otp_create
+      tags:
+      - verify-otp
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/webhooks/razorpay/:
+    post:
+      operationId: webhooks_razorpay_create
+      description: Public webhook endpoint for Razorpay.
+      tags:
+      - webhooks
+      security:
+      - tokenAuth: []
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+components:
+  schemas:
+    Address:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        address_line1:
+          type: string
+          maxLength: 255
+        address_line2:
+          type: string
+          nullable: true
+          maxLength: 255
+        landmark:
+          type: string
+          nullable: true
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        postal_code:
+          type: string
+          maxLength: 20
+        country:
+          type: string
+          maxLength: 100
+        is_default:
+          type: boolean
+        user:
+          type: integer
+          readOnly: true
+      required:
+      - address_line1
+      - city
+      - country
+      - id
+      - postal_code
+      - state
+      - user
+    AdminOrder:
+      type: object
+      description: Adds fulfilment/money fields visible only to staff & providers.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        order_number:
+          type: string
+          maxLength: 64
+        user:
+          type: integer
+        user_name:
+          type: string
+          readOnly: true
+        user_phone:
+          type: string
+          readOnly: true
+        address:
+          allOf:
+          - $ref: '#/components/schemas/Address'
+          readOnly: true
+        assigned_provider:
+          type: integer
+          nullable: true
+        provider_name:
+          type: string
+          readOnly: true
+        prescription:
+          type: integer
+          nullable: true
+        status:
+          $ref: '#/components/schemas/AdminOrderStatusEnum'
+        payment_status:
+          $ref: '#/components/schemas/PaymentStatusEnum'
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethodEnum'
+        subtotal:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        total_mrp:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        delivery_fee:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        discount_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        total:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        placed_at:
+          type: string
+          format: date-time
+        estimated_delivery_mins:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+          readOnly: true
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        commission_rate:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        commission_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        provider_earning:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        stock_reserved:
+          type: boolean
+      required:
+      - address
+      - id
+      - items
+      - order_number
+      - provider_name
+      - user
+      - user_name
+      - user_phone
+    AdminOrderStatusEnum:
+      enum:
+      - placed
+      - approved
+      - rejected
+      - packed
+      - confirmed
+      - processing
+      - out_for_delivery
+      - delivered
+      - cancelled
+      - returned
+      type: string
+      description: |-
+        * `placed` - Placed
+        * `approved` - Approved
+        * `rejected` - Rejected
+        * `packed` - Packed
+        * `confirmed` - Confirmed
+        * `processing` - Processing
+        * `out_for_delivery` - Out for delivery
+        * `delivered` - Delivered
+        * `cancelled` - Cancelled
+        * `returned` - Returned
+    AuthToken:
+      type: object
+      properties:
+        username:
+          type: string
+          writeOnly: true
+        password:
+          type: string
+          writeOnly: true
+        token:
+          type: string
+          readOnly: true
+      required:
+      - password
+      - token
+      - username
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 200
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - name
+      - updated_at
+    Medicine:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        brand:
+          type: string
+          nullable: true
+          maxLength: 255
+        category:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+          readOnly: true
+        category_ids:
+          type: array
+          items:
+            type: integer
+            writeOnly: true
+          writeOnly: true
+        content:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 200
+        manufacturer:
+          type: string
+          nullable: true
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        mrp:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        stock:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        schedule:
+          allOf:
+          - $ref: '#/components/schemas/ScheduleEnum'
+          description: |-
+            Drug schedule classification; H/H1/X require a prescription.
+
+            * `OTC` - Over the counter
+            * `H` - Schedule H
+            * `H1` - Schedule H1
+            * `X` - Schedule X
+        is_prescription_required:
+          type: boolean
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - category
+      - created_at
+      - id
+      - name
+      - updated_at
+    Notification:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        notification_type:
+          allOf:
+          - $ref: '#/components/schemas/NotificationTypeEnum'
+          readOnly: true
+        title:
+          type: string
+          readOnly: true
+        body:
+          type: string
+          readOnly: true
+        order:
+          type: integer
+          readOnly: true
+          nullable: true
+        data:
+          readOnly: true
+          nullable: true
+        is_read:
+          type: boolean
+          readOnly: true
+        is_sent:
+          type: boolean
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - body
+      - created_at
+      - data
+      - id
+      - is_read
+      - is_sent
+      - notification_type
+      - order
+      - title
+    NotificationTypeEnum:
+      enum:
+      - order_placed
+      - order_approved
+      - order_rejected
+      - order_packed
+      - out_for_delivery
+      - order_delivered
+      - order_cancelled
+      - payment
+      - generic
+      type: string
+      description: |-
+        * `order_placed` - Order placed
+        * `order_approved` - Order approved
+        * `order_rejected` - Order rejected
+        * `order_packed` - Order packed
+        * `out_for_delivery` - Out for delivery
+        * `order_delivered` - Order delivered
+        * `order_cancelled` - Order cancelled
+        * `payment` - Payment update
+        * `generic` - Notification
+    OrderItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        medicine_id:
+          type: integer
+          readOnly: true
+        medicine_name:
+          type: string
+          readOnly: true
+        quantity:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        unit_price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        mrp:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        prescription_required:
+          type: boolean
+        line_total:
+          type: number
+          format: double
+          readOnly: true
+      required:
+      - id
+      - line_total
+      - medicine_id
+      - medicine_name
+    PaginatedAdminOrderList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminOrder'
+    PaginatedCategoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+    PaginatedMedicineList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Medicine'
+    PaginatedNotificationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+    PaginatedTransactionList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+    PatchedAdminOrder:
+      type: object
+      description: Adds fulfilment/money fields visible only to staff & providers.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        order_number:
+          type: string
+          maxLength: 64
+        user:
+          type: integer
+        user_name:
+          type: string
+          readOnly: true
+        user_phone:
+          type: string
+          readOnly: true
+        address:
+          allOf:
+          - $ref: '#/components/schemas/Address'
+          readOnly: true
+        assigned_provider:
+          type: integer
+          nullable: true
+        provider_name:
+          type: string
+          readOnly: true
+        prescription:
+          type: integer
+          nullable: true
+        status:
+          $ref: '#/components/schemas/AdminOrderStatusEnum'
+        payment_status:
+          $ref: '#/components/schemas/PaymentStatusEnum'
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethodEnum'
+        subtotal:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        total_mrp:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        delivery_fee:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        discount_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        total:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        placed_at:
+          type: string
+          format: date-time
+        estimated_delivery_mins:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+          readOnly: true
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        commission_rate:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        commission_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        provider_earning:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        stock_reserved:
+          type: boolean
+    PatchedCategory:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 200
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+    PatchedMedicine:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        brand:
+          type: string
+          nullable: true
+          maxLength: 255
+        category:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+          readOnly: true
+        category_ids:
+          type: array
+          items:
+            type: integer
+            writeOnly: true
+          writeOnly: true
+        content:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 200
+        manufacturer:
+          type: string
+          nullable: true
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+        price:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        mrp:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+        stock:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        schedule:
+          allOf:
+          - $ref: '#/components/schemas/ScheduleEnum'
+          description: |-
+            Drug schedule classification; H/H1/X require a prescription.
+
+            * `OTC` - Over the counter
+            * `H` - Schedule H
+            * `H1` - Schedule H1
+            * `X` - Schedule X
+        is_prescription_required:
+          type: boolean
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+    PaymentMethodEnum:
+      enum:
+      - online
+      - cod
+      type: string
+      description: |-
+        * `online` - Online (Razorpay)
+        * `cod` - Cash on delivery
+    PaymentStatusEnum:
+      enum:
+      - pending
+      - paid
+      - failed
+      - refunded
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `paid` - Paid
+        * `failed` - Failed
+        * `refunded` - Refunded
+    Prescription:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        image:
+          type: string
+          format: uri
+        status:
+          allOf:
+          - $ref: '#/components/schemas/PrescriptionStatusEnum'
+          readOnly: true
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - image
+      - status
+    PrescriptionStatusEnum:
+      enum:
+      - pending
+      - approved
+      - rejected
+      type: string
+      description: |-
+        * `pending` - Pending review
+        * `approved` - Approved
+        * `rejected` - Rejected
+    ScheduleEnum:
+      enum:
+      - OTC
+      - H
+      - H1
+      - X
+      type: string
+      description: |-
+        * `OTC` - Over the counter
+        * `H` - Schedule H
+        * `H1` - Schedule H1
+        * `X` - Schedule X
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        order_id:
+          type: integer
+          readOnly: true
+        order_number:
+          type: string
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_phone:
+          type: string
+          readOnly: true
+        provider:
+          type: string
+          readOnly: true
+        payment_method:
+          type: string
+          nullable: true
+          maxLength: 50
+        transaction_order_id:
+          type: string
+          nullable: true
+          maxLength: 255
+        razorpay_payment_id:
+          type: string
+          nullable: true
+          maxLength: 255
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        succeeded:
+          type: boolean
+        paid_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - order_id
+      - order_number
+      - provider
+      - updated_at
+      - user_name
+      - user_phone
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+    tokenAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Token-based authentication with required prefix "Token"

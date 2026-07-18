@@ -1,13 +1,24 @@
-from .models import Cart, CartItem
-from docatho_backend.medicines.models import Medicine
-from rest_framework import serializers
 from decimal import Decimal
+
+from rest_framework import serializers
+
+from docatho_backend.medicines.models import Medicine
+
+from .models import Cart
+from .models import CartItem
 
 
 class MedicineLiteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Medicine
-        fields = ("id", "name", "image_url")
+        fields = (
+            "id",
+            "name",
+            "image_url",
+            "schedule",
+            "is_prescription_required",
+            "stock",
+        )
 
 
 class CartItemSerializer(serializers.ModelSerializer):
@@ -59,17 +70,17 @@ class CartSerializer(serializers.ModelSerializer):
         read_only_fields = ("total_mrp", "subtotal", "total", "items")
 
     def get_address(self, obj):
-        address = obj.user.addresses.all()
-        print(address)
-        if address.first():
+        address = obj.user.address  # default address, else most recent
+        if address:
             return {
-                "id": address.first().id,
-                "address_line1": address.first().address_line1,
-                "address_line2": address.first().address_line2,
-                "landmark": address.first().landmark,
-                "city": address.first().city,
-                "postal_code": address.first().postal_code,
-                "state": address.first().state,
-                "country": address.first().country,
+                "id": address.id,
+                "address_line1": address.address_line1,
+                "address_line2": address.address_line2,
+                "landmark": address.landmark,
+                "city": address.city,
+                "postal_code": address.postal_code,
+                "state": address.state,
+                "country": address.country,
+                "is_default": address.is_default,
             }
         return None

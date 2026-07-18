@@ -283,7 +283,7 @@ class AdminLoginView(APIView):
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
-        # allow common address fields; keep user read-only so creation uses request.user
+        # keep user read-only so creation always binds to request.user
         fields = (
             "id",
             "address_line1",
@@ -292,69 +292,78 @@ class AddressSerializer(serializers.ModelSerializer):
             "city",
             "state",
             "postal_code",
+            "country",
+            "is_default",
             "user",
         )
         read_only_fields = ("id", "user")
 
-    def create(self, validated_data):
-        # user will be provided by view.save(user=request.user)
-        return super().create(validated_data)
-
 
 class CreateAddressAPIView(APIView):
-    """
-    POST /api/users/addresses/ - create address for request.user
+    """Address collection for the current user.
+
+    * GET  /api/addresses/ - list the user's addresses (default first)
+    * POST /api/addresses/ - create an address for the user
+
+    The model's ``save()`` guarantees a single default per user, so no manual
+    default-unsetting is needed here.
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
+    def get(self, request):
+        addresses = Address.objects.filter(user=request.user)
+        data = AddressSerializer(addresses, many=True, context={"request": request}).data
+        return Response(data, status=status.HTTP_200_OK)
+
     def post(self, request):
         serializer = AddressSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        # set owner
         addr = serializer.save(user=request.user)
-        # if marked default, unset other defaults for this user
-        try:
-            if getattr(addr, "is_default", False):
-                Address.objects.filter(user=request.user).exclude(pk=addr.pk).update(
-                    is_default=False
-                )
-        except Exception:
-            pass
         out = AddressSerializer(addr, context={"request": request}).data
         return Response(out, status=status.HTTP_201_CREATED)
 
 
 class UpdateAddressAPIView(APIView):
-    """
-    PATCH /api/users/addresses/<pk>/ - partial update address owned by request.user
+    """Single address owned by the current user.
+
+    * GET    /api/addresses/<pk>/ - retrieve
+    * PATCH  /api/addresses/<pk>/ - partial update (incl. set is_default)
+    * DELETE /api/addresses/<pk>/ - delete
     """
 
     permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk):
+        addr = get_object_or_404(Address, pk=pk, user=request.user)
+        out = AddressSerializer(addr, context={"request": request}).data
+        return Response(out, status=status.HTTP_200_OK)
 
     def patch(self, request, pk):
         addr = get_object_or_404(Address, pk=pk, user=request.user)
         serializer = AddressSerializer(addr, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         addr = serializer.save()
-        # if marked default, unset other defaults for this user
-        try:
-            if getattr(addr, "is_default", False):
-                Address.objects.filter(user=request.user).exclude(pk=addr.pk).update(
-                    is_default=False
-                )
-        except Exception:
-            pass
         out = AddressSerializer(addr, context={"request": request}).data
         return Response(out, status=status.HTTP_200_OK)
 
+    def delete(self, request, pk):
+        addr = get_object_or_404(Address, pk=pk, user=request.user)
+        addr.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class DashboardView(APIView):
+    # Public landing content (marketing banners + active categories); no auth
+    # required so the apps can render the home screen before login.
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
     def get(self, request):
         marketing_urls = [
-            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad1.png"
-            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad2.png"
-            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad3.png"
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad1.png",
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad2.png",
+            "https://docatho-media.s3.ap-south-1.amazonaws.com/ad3.png",
         ]
         categories_qs = Category.objects.filter(is_active=True)
         categories = CategorySerializer(categories_qs, many=True).data
@@ -382,18 +391,10 @@ class ListUsersAPIView(APIView):
     Requires authentication. Admin users can see all users.
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAdminUser]
     pagination_class = GenericPaginationClass
 
     def get(self, request):
-        # Optionally restrict to admin users only
-        # Uncomment the following lines if you want admin-only access
-        # if not request.user.is_staff:
-        #     return Response(
-        #         {"detail": "You do not have permission to perform this action."},
-        #         status=status.HTTP_403_FORBIDDEN,
-        #     )
-
         users = User.objects.all().order_by("-date_joined")
 
         # Apply pagination

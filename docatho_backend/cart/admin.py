@@ -1,13 +1,13 @@
 from django.contrib import admin
 
-
-from docatho_backend.cart.models import Cart, CartItem
+from docatho_backend.cart.models import Cart
+from docatho_backend.cart.models import CartItem
 
 
 @admin.register(Cart)
 class CartAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "created_at", "updated_at")
-    search_fields = ("user__email", "user__first_name", "user__last_name", "id")
+    list_display = ("id", "user", "total", "created_at", "updated_at")
+    search_fields = ("user__name", "user__phone", "id")
     list_filter = ("created_at", "updated_at")
     ordering = ("-created_at",)
 

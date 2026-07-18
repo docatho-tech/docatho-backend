@@ -37,7 +37,10 @@ class User(AbstractUser):
 
     @property
     def address(self):
-        return self.addresses.first()
+        """Preferred delivery address: the default one, else the most recent."""
+        return (
+            self.addresses.filter(is_default=True).first() or self.addresses.first()
+        )
 
     def __str__(self) -> str:
         """Return a plain string for the user suitable for display in admin and logs.
@@ -65,7 +68,7 @@ class User(AbstractUser):
             str: URL for user detail.
 
         """
-        return reverse("users:detail", kwargs={"pk": self.phone})
+        return reverse("users:detail", kwargs={"pk": self.pk})
 
 
 class PhoneOtp(BaseModel):
@@ -103,11 +106,20 @@ class Address(BaseModel):
     state = models.CharField(max_length=100)
     postal_code = models.CharField(max_length=20)
     country = models.CharField(max_length=100)
+    is_default = models.BooleanField(default=False)
 
     class Meta(BaseModel.Meta):
-        ordering = ["-updated_at"]
+        ordering = ["-is_default", "-updated_at"]
         verbose_name = "Address"
         verbose_name_plural = "Addresses"
 
     def __str__(self) -> str:
         return f"Address<{self.pk}> {self.address_line1}, {self.city}"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Enforce a single default per user.
+        if self.is_default:
+            Address.objects.filter(user=self.user).exclude(pk=self.pk).update(
+                is_default=False,
+            )
