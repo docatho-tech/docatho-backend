@@ -14,6 +14,16 @@ class NotificationType(models.TextChoices):
     ORDER_DELIVERED = "order_delivered", _("Order delivered")
     ORDER_CANCELLED = "order_cancelled", _("Order cancelled")
     PAYMENT = "payment", _("Payment update")
+    APPOINTMENT_BOOKED = "appointment_booked", _("Appointment booked")
+    APPOINTMENT_CONFIRMED = "appointment_confirmed", _("Appointment confirmed")
+    APPOINTMENT_REJECTED = "appointment_rejected", _("Appointment rejected")
+    APPOINTMENT_COMPLETED = "appointment_completed", _("Appointment completed")
+    APPOINTMENT_CANCELLED = "appointment_cancelled", _("Appointment cancelled")
+    DIAG_BOOKING_REQUESTED = "diag_booking_requested", _("Diagnostic booking requested")
+    DIAG_BOOKING_CONFIRMED = "diag_booking_confirmed", _("Diagnostic booking confirmed")
+    DIAG_BOOKING_CANCELLED = "diag_booking_cancelled", _("Diagnostic booking cancelled")
+    DIAG_BOOKING_COMPLETED = "diag_booking_completed", _("Diagnostic booking completed")
+    DIAG_SAMPLE_COLLECTED = "diag_sample_collected", _("Diagnostic sample collected")
     GENERIC = "generic", _("Notification")
 
 
@@ -56,3 +66,33 @@ class Notification(BaseModel):
 
     def __str__(self) -> str:
         return f"Notification<{self.pk}> to={self.recipient_id} type={self.notification_type}"
+
+
+class DeviceTokenPlatform(models.TextChoices):
+    WEB = "web", _("Web")
+    IOS = "ios", _("iOS")
+    ANDROID = "android", _("Android")
+
+
+class DeviceToken(BaseModel):
+    """FCM device token registered by a client app for push delivery."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="device_tokens",
+    )
+    token = models.CharField(max_length=512, unique=True)
+    platform = models.CharField(
+        max_length=16,
+        choices=DeviceTokenPlatform.choices,
+        default=DeviceTokenPlatform.WEB,
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "platform"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"DeviceToken<{self.pk}> user={self.user_id} platform={self.platform}"

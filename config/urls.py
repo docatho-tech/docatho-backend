@@ -30,6 +30,10 @@ urlpatterns = [
     path("api/", include("docatho_backend.orders.urls")),
     path("api/", include("docatho_backend.notifications.urls")),
     path("api/providers/", include("docatho_backend.providers.urls")),
+    path(
+        "api/healthcare/",
+        include("docatho_backend.healthcare.urls"),
+    ),
     # Media files
     *static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT),
 ]

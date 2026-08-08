@@ -98,10 +98,20 @@ class AdminProviderCreateSerializer(serializers.Serializer):
             provider.specialty = validated_data.get("specialty") or ""
             provider.provider_type = validated_data.get("provider_type")
             provider.save()
+            self._ensure_doctor_profile(provider)
             return provider
-        return Provider.objects.create(
+        provider = Provider.objects.create(
             user=user,
             name=validated_data["name"],
             specialty=validated_data.get("specialty") or "",
             provider_type=validated_data.get("provider_type"),
         )
+        self._ensure_doctor_profile(provider)
+        return provider
+
+    def _ensure_doctor_profile(self, provider: Provider) -> None:
+        if provider.provider_type != ProviderType.DOCTOR.value:
+            return
+        from docatho_backend.healthcare.models import DoctorProfile
+
+        DoctorProfile.objects.get_or_create(provider=provider)

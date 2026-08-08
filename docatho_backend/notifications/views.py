@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from docatho_backend.orders.paginators import GenericPaginationClass
 
 from .models import Notification
+from .serializers import DeviceTokenSerializer
 from .serializers import NotificationSerializer
 
 
@@ -49,3 +50,26 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def mark_all_read(self, request):
         updated = self.get_queryset().filter(is_read=False).update(is_read=True)
         return Response({"marked_read": updated})
+
+
+class DeviceTokenViewSet(viewsets.GenericViewSet):
+    """Register an FCM device token for the current user.
+
+    * POST /api/device-tokens/  - upsert token for authenticated user
+    """
+
+    permission_classes = (IsAuthenticated,)
+    serializer_class = DeviceTokenSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        device_token = serializer.save()
+        return Response(
+            {
+                "id": device_token.pk,
+                "token": device_token.token,
+                "platform": device_token.platform,
+            },
+            status=status.HTTP_201_CREATED,
+        )
