@@ -65,3 +65,25 @@ class BrokenBackend:
 
     def send(self, notification):
         raise RuntimeError("push provider down")
+
+
+def test_register_device_token(auth_client):
+    user = UserFactory()
+    client = auth_client(user)
+    resp = client.post(
+        "/api/device-tokens/",
+        {"token": "fcm-token-abc", "platform": "web"},
+        format="json",
+    )
+    assert resp.status_code == 201
+    assert resp.data["token"] == "fcm-token-abc"
+    assert resp.data["platform"] == "web"
+
+    # Re-registering the same token updates ownership if needed.
+    resp2 = client.post(
+        "/api/device-tokens/",
+        {"token": "fcm-token-abc", "platform": "web"},
+        format="json",
+    )
+    assert resp2.status_code == 201
+    assert resp2.data["id"] == resp.data["id"]

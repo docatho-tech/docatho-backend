@@ -12,6 +12,14 @@ from docatho_backend.orders.models import Order
 from docatho_backend.orders.models import OrderItem
 from docatho_backend.orders.models import Prescription
 from docatho_backend.providers.models import Provider
+from docatho_backend.healthcare.models import ConsultationMode
+from docatho_backend.healthcare.models import DiagnosticTest
+from docatho_backend.healthcare.models import DiagnosticTestCategory
+from docatho_backend.healthcare.models import DoctorProfile
+from docatho_backend.healthcare.models import MedicalSpecialty
+from docatho_backend.healthcare.models import VerificationStatus
+from docatho_backend.providers.enums import ProviderType
+
 from docatho_backend.users.models import Address
 from docatho_backend.users.models import User
 
@@ -116,3 +124,61 @@ class OrderItemFactory(DjangoModelFactory):
 
     class Meta:
         model = OrderItem
+
+
+class MedicalSpecialtyFactory(DjangoModelFactory):
+    name = factory.Sequence(lambda n: f"Specialty {n}")
+    is_active = True
+
+    class Meta:
+        model = MedicalSpecialty
+
+
+class DoctorProviderFactory(ProviderFactory):
+    provider_type = ProviderType.DOCTOR.value
+    specialty = "General Physician"
+
+
+class DoctorProfileFactory(DjangoModelFactory):
+    provider = factory.SubFactory(DoctorProviderFactory)
+    biography = factory.Faker("paragraph")
+    experience_years = 5
+    fee_online = Decimal("500.00")
+    fee_in_clinic = Decimal("700.00")
+    fee_home_visit = Decimal("900.00")
+    consultation_modes = [ConsultationMode.ONLINE, ConsultationMode.IN_CLINIC]
+    clinic_city = "Mumbai"
+    verification_status = VerificationStatus.APPROVED
+    is_verified = True
+    rating_avg = Decimal("4.50")
+    review_count = 10
+
+    class Meta:
+        model = DoctorProfile
+        skip_postgeneration_save = True
+
+    @factory.post_generation
+    def specialties(self, create, extracted, **kwargs):
+        if not create:
+            return
+        if extracted:
+            for sp in extracted:
+                self.specialties.add(sp)
+
+
+class DiagnosticTestCategoryFactory(DjangoModelFactory):
+    name = factory.Sequence(lambda n: f"Diag Category {n}")
+    is_active = True
+
+    class Meta:
+        model = DiagnosticTestCategory
+
+
+class DiagnosticTestFactory(DjangoModelFactory):
+    name = factory.Sequence(lambda n: f"Lab Test {n}")
+    category = factory.SubFactory(DiagnosticTestCategoryFactory)
+    price = Decimal("499.00")
+    is_active = True
+
+    class Meta:
+        model = DiagnosticTest
