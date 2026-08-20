@@ -228,7 +228,9 @@ def test_chemist_provider_sees_assigned_orders_only(auth_client):
     medicine = MedicineFactory()
     client = auth_client(patient)
     _add_to_cart(client, medicine)
-    checkout = client.post("/api/orders/checkout/", {"payment_method": "cod"}, format="json")
+    checkout = client.post(
+        "/api/orders/checkout/", {"payment_method": "cod"}, format="json"
+    )
     order_id = checkout.data["order"]["id"]
     auth_client(AdminUserFactory()).patch(
         f"/api/admin/orders/{order_id}/assign-provider/",
@@ -242,7 +244,9 @@ def test_chemist_provider_sees_assigned_orders_only(auth_client):
 
     other_list = auth_client(other.user).get("/api/providers/chemist-order-list/")
     assert other_list.status_code == 200
-    assert not any(o["id"] == order_id for o in other_list.data.get("results", other_list.data))
+    assert not any(
+        o["id"] == order_id for o in other_list.data.get("results", other_list.data)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -265,7 +269,9 @@ def test_admin_dashboard_stats_and_doctor_verification(auth_client):
 
     patients = client.get("/api/healthcare/admin/patients/")
     assert patients.status_code == 200
-    assert any(p["id"] == patient.id for p in patients.data.get("results", patients.data))
+    assert any(
+        p["id"] == patient.id for p in patients.data.get("results", patients.data)
+    )
 
     doctors = client.get("/api/healthcare/admin/doctors/")
     assert doctors.status_code == 200
@@ -296,3 +302,57 @@ def test_provider_cannot_access_patient_wishlist(auth_client):
         format="json",
     )
     assert resp.status_code == 403
+
+
+def test_provider_earnings_after_delivery(auth_client):
+    """Chemist provider earnings reflect delivered paid orders."""
+    from decimal import Decimal
+    from docatho_backend.orders.models import Order
+    from docatho_backend.testing.factories import AddressFactory
+
+    patient = UserFactory()
+    AddressFactory(user=patient, is_default=True)
+    admin = AdminUserFactory()
+    chemist = ProviderFactory()
+    medicine = MedicineFactory(stock=10)
+    client = auth_client(patient)
+    _add_to_cart(client, medicine)
+    checkout = client.post(
+        "/api/orders/checkout/", {"payment_method": "cod"}, format="json"
+    )
+    order_id = checkout.data["order"]["id"]
+    auth_client(admin).patch(
+        f"/api/admin/orders/{order_id}/assign-provider/",
+        {"provider_id": chemist.id},
+        format="json",
+    )
+    provider_client = auth_client(chemist.user)
+    for st in ("approved", "packed", "out_for_delivery", "delivered"):
+        provider_client.patch(
+            f"/api/providers/chemist-order-update/{order_id}/",
+            {"status": st},
+            format="json",
+        )
+    Order.objects.filter(pk=order_id).update(
+        payment_status=Order.PaymentStatus.PAID,
+        provider_earning=Decimal("90.00"),
+    )
+    earnings = provider_client.get("/api/providers/earnings/")
+    assert earnings.status_code == 200
+    assert Decimal(earnings.data["payout"]) >= Decimal("90.00")
+
+
+def test_patient_saved_doctors_and_content(auth_client):
+    patient = UserFactory()
+    doctor = DoctorProfileFactory()
+    client = auth_client(patient)
+    saved = client.post(
+        "/api/healthcare/saved-doctors/",
+        {"doctor_id": doctor.id},
+        format="json",
+    )
+    assert saved.status_code == 201
+    listing = client.get("/api/healthcare/saved-doctors/")
+    assert listing.status_code == 200
+    content = client.get("/api/healthcare/content/?page_type=faq")
+    assert content.status_code == 200
