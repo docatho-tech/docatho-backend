@@ -271,3 +271,6 @@ dump.rdb
 docatho_backend/media/
 
 .pytest_cache/
+
+docatho_backend/static/invoices/
+docatho_backend/static/prescriptions/

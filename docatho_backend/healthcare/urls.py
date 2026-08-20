@@ -14,6 +14,8 @@ router.register("wishlist", views.WishlistViewSet, basename="wishlist")
 router.register("support-tickets", views.SupportTicketViewSet, basename="support-ticket")
 router.register("content", views.ContentPageViewSet, basename="content")
 router.register("specialties", views.MedicalSpecialtyViewSet, basename="specialty")
+router.register("admin/prescriptions", views.AdminPrescriptionViewSet, basename="admin-prescription")
+router.register("admin/availability", views.AdminDoctorAvailabilityViewSet, basename="admin-availability")
 
 urlpatterns = [
     path("doctors/", views.DoctorListAPIView.as_view(), name="doctor-list"),
@@ -27,9 +29,11 @@ urlpatterns = [
     path("provider/appointments/<int:appointment_id>/video-token/", views.ProviderAppointmentVideoTokenAPIView.as_view(), name="provider-appointment-video-token"),
     path("admin/dashboard-stats/", views.AdminDashboardStatsAPIView.as_view(), name="admin-dashboard-stats"),
     path("admin/patients/", views.AdminPatientListAPIView.as_view(), name="admin-patients"),
+    path("admin/patients/<int:pk>/", views.AdminPatientDetailAPIView.as_view(), name="admin-patient-detail"),
     path("admin/doctors/", views.AdminDoctorListAPIView.as_view(), name="admin-doctors"),
+    path("admin/doctors/<int:pk>/", views.AdminDoctorDetailAPIView.as_view(), name="admin-doctor-detail"),
     path("admin/doctors/<int:pk>/verify/", views.AdminDoctorVerificationAPIView.as_view(), name="admin-doctor-verify"),
     path("admin/diagnostic-bookings/", views.AdminDiagnosticBookingViewSet.as_view({"get": "list"}), name="admin-diagnostic-bookings"),
-    path("admin/diagnostic-bookings/<int:pk>/", views.AdminDiagnosticBookingViewSet.as_view({"patch": "partial_update"}), name="admin-diagnostic-booking-detail"),
+    path("admin/diagnostic-bookings/<int:pk>/", views.AdminDiagnosticBookingViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}), name="admin-diagnostic-booking-detail"),
     path("", include(router.urls)),
 ]

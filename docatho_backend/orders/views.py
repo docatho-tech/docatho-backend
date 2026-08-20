@@ -219,8 +219,17 @@ class OrderViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["get"])
     def invoice(self, request, pk=None):
-        """Download the order's invoice PDF (EP-03)."""
-        order = get_object_or_404(Order, pk=pk, user=request.user)
+        """Download the order's invoice PDF (EP-03).
+
+        Scoped to the requesting customer, except for staff: a support agent
+        handling a billing query needs the same PDF the customer is looking
+        at, and scoping this to `request.user` answered 404 for every order an
+        admin did not personally place.
+        """
+        if request.user.is_staff:
+            order = get_object_or_404(Order, pk=pk)
+        else:
+            order = get_object_or_404(Order, pk=pk, user=request.user)
         invoice = get_or_create_invoice(order)
         return FileResponse(
             invoice.pdf.open("rb"),
@@ -479,6 +488,9 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
         "payment_status",
         "payment_method",
         "assigned_provider",
+        # Lets the dashboard's patient drawer list that patient's orders
+        # without a dedicated endpoint.
+        "user",
     ]
     search_fields = ["order_number", "user__name", "user__phone"]
     queryset = Order.objects.all().order_by("-placed_at")

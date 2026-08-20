@@ -15,6 +15,7 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.generics import ListAPIView
+from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -49,6 +50,7 @@ from docatho_backend.masters.permissions import IsProvider
 from docatho_backend.masters.permissions import ReadOnlyOrAdmin
 from docatho_backend.masters.permissions import is_provider
 from docatho_backend.orders.models import Order
+from docatho_backend.orders.models import Prescription
 from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.notifications.models import NotificationType
 from docatho_backend.notifications.services import notify
@@ -98,13 +100,15 @@ class AppointmentSerializer(serializers.ModelSerializer):
         fields = (
             "id", "doctor", "doctor_id", "doctor_name", "patient_name", "scheduled_at",
             "consultation_mode", "status", "fee", "payment_method", "payment_status",
-            "paid_at", "video_room_id", "recording_url", "can_join_video", "requires_payment",
+            "paid_at", "video_room_id", "video_started_at", "video_ended_at",
+            "recording_url", "can_join_video", "requires_payment",
             "symptoms", "notes", "prescription_notes", "patient_rating",
             "patient_feedback", "completed_at", "created_at",
         )
         read_only_fields = (
             "id", "status", "fee", "payment_status", "paid_at", "video_room_id",
-            "recording_url", "prescription_notes", "completed_at", "created_at",
+            "video_started_at", "video_ended_at", "recording_url",
+            "prescription_notes", "completed_at", "created_at",
         )
 
     def get_can_join_video(self, obj: Appointment) -> bool:
@@ -118,6 +122,22 @@ class AppointmentSerializer(serializers.ModelSerializer):
             obj.consultation_mode == ConsultationMode.ONLINE
             and obj.payment_status != AppointmentPaymentStatus.PAID
             and obj.status not in (AppointmentStatus.CANCELLED, AppointmentStatus.REJECTED, AppointmentStatus.COMPLETED)
+        )
+
+
+class AdminAppointmentSerializer(AppointmentSerializer):
+    """Staff view of an appointment.
+
+    `status` is unlocked so support can confirm, complete or reject on a
+    patient's behalf; the patient-facing serializer keeps it read-only so a
+    customer cannot mark their own consultation completed.
+    """
+
+    class Meta(AppointmentSerializer.Meta):
+        read_only_fields = tuple(
+            field
+            for field in AppointmentSerializer.Meta.read_only_fields
+            if field != "status"
         )
 
 
@@ -491,8 +511,17 @@ class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
 
 class AppointmentViewSet(viewsets.ModelViewSet):
     pagination_class = GenericPaginationClass
-    filterset_fields = ["status", "consultation_mode"]
+    # `patient` lets the admin dashboard show one patient's consultation
+    # history without a bespoke endpoint.
+    filterset_fields = ["status", "consultation_mode", "patient"]
     ordering_fields = ["scheduled_at", "created_at"]
+    # SearchFilter is a default backend, but without search_fields it is a
+    # no-op: `?search=` was silently ignored and returned the whole list.
+    search_fields = [
+        "patient__name",
+        "patient__phone",
+        "doctor__provider__name",
+    ]
 
     def perform_create(self, serializer):
         appointment = serializer.save()
@@ -508,7 +537,12 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         )
 
     def get_permissions(self):
-        if self.request.user.is_staff and self.action in ("list", "retrieve"):
+        # Staff get the whole surface, not just reads. Support agents have to
+        # reschedule, annotate and cancel on a patient's behalf — and until
+        # this covered every action, the dashboard's "Cancel appointment"
+        # button called an endpoint that answered 403 for the only role that
+        # could see the button.
+        if self.request.user.is_staff:
             return [IsAdmin()]
         return [IsCustomer()]
 
@@ -521,6 +555,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == "create":
             return AppointmentCreateSerializer
+        # Support agents move appointments between states on the phone; the
+        # patient-facing serializer locks `status` so a customer cannot mark
+        # their own consultation completed.
+        if self.request.user.is_staff:
+            return AdminAppointmentSerializer
         return AppointmentSerializer
 
 
@@ -659,6 +698,9 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
     serializer_class = SupportTicketSerializer
     pagination_class = GenericPaginationClass
     filterset_fields = ["status"]
+    # Admins triage by subject or by who raised the ticket; customers only
+    # ever search their own queryset, so the reporter fields are safe here.
+    search_fields = ["subject", "description", "user__name", "user__phone"]
 
     def get_permissions(self):
         if self.action in ("list", "retrieve") and self.request.user.is_staff:
@@ -849,6 +891,11 @@ class AdminDashboardStatsAPIView(APIView):
             "diagnostic_bookings_count": DiagnosticBooking.objects.count(),
             "diagnostic_bookings_requested": DiagnosticBooking.objects.filter(status="requested").count(),
             "open_support_tickets": SupportTicket.objects.filter(status="open").count(),
+            # Uploads still waiting on a human. Surfaced because a review
+            # queue nobody can see is a queue nobody works.
+            "prescriptions_pending": Prescription.objects.filter(
+                status=Prescription.Status.PENDING,
+            ).count(),
             "appointments_pending_payment": Appointment.objects.filter(
                 consultation_mode=ConsultationMode.ONLINE,
                 payment_status=AppointmentPaymentStatus.PENDING,
@@ -866,7 +913,8 @@ class AdminPatientListAPIView(ListAPIView):
     permission_classes = [IsAdmin]
     serializer_class = AdminPatientSerializer
     pagination_class = GenericPaginationClass
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ["is_active"]
     search_fields = ["name", "phone", "email"]
 
     def get_queryset(self):
@@ -908,17 +956,184 @@ class AdminDoctorVerificationAPIView(APIView):
 
 
 
+class AdminDoctorAvailabilityViewSet(viewsets.ModelViewSet):
+    """Admin: manage any doctor's weekly slots.
+
+    The provider app owns this for the doctor themselves; support had no way
+    in at all, so "the clinic rang, they can't do Tuesdays any more" required
+    a developer.
+    """
+
+    permission_classes = [IsAdmin]
+    serializer_class = DoctorAvailabilitySerializer
+    pagination_class = GenericPaginationClass
+    queryset = DoctorAvailability.objects.select_related("doctor__provider")
+    filterset_fields = ["doctor", "consultation_mode", "is_active"]
+    ordering = ["day_of_week", "start_time"]
+
+    def perform_create(self, serializer):
+        doctor_id = self.request.data.get("doctor")
+        doctor = get_object_or_404(DoctorProfile, pk=doctor_id)
+        serializer.save(doctor=doctor)
+
+
+class AdminPrescriptionSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source="user.name", read_only=True)
+    user_phone = serializers.CharField(source="user.phone", read_only=True)
+    image_url = serializers.SerializerMethodField()
+    order_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Prescription
+        fields = (
+            "id", "user", "user_name", "user_phone", "image_url", "status",
+            "notes", "order_count", "created_at",
+        )
+        read_only_fields = ("id", "user", "created_at")
+
+    def get_image_url(self, obj) -> str | None:
+        if not obj.image:
+            return None
+        request = self.context.get("request")
+        url = obj.image.url
+        return request.build_absolute_uri(url) if request else url
+
+    def get_order_count(self, obj) -> int:
+        return obj.orders.count()
+
+
+class AdminPrescriptionViewSet(viewsets.ModelViewSet):
+    """Admin: the prescription review queue.
+
+    Patients upload a prescription to clear the checkout gate on Schedule
+    H/H1/X medicines, and ``Prescription.status`` defaults to *Pending
+    review* — but nothing in the system ever set it to approved or rejected,
+    and ``PrescriptionViewSet`` scopes its queryset to ``request.user``, so an
+    admin listing prescriptions saw an empty list. Uploads had no reviewer.
+    """
+
+    permission_classes = [IsAdmin]
+    serializer_class = AdminPrescriptionSerializer
+    pagination_class = GenericPaginationClass
+    queryset = Prescription.objects.select_related("user").prefetch_related("orders")
+    filterset_fields = ["status", "user"]
+    search_fields = ["user__name", "user__phone", "notes"]
+    ordering_fields = ["created_at", "status"]
+    # Documents are uploaded by the patient and are evidence; an admin
+    # reviews them, never edits or destroys them.
+    http_method_names = ["get", "patch", "head", "options"]
+
+
+class AdminDoctorProfileSerializer(serializers.ModelSerializer):
+    """Admin-editable clinical profile for a doctor.
+
+    Identity (name, phone, email) belongs to the linked ``Provider`` and is
+    edited through the partners endpoint, so it is read-only here — one field,
+    one owner.
+    """
+
+    provider_id = serializers.IntegerField(source="provider.id", read_only=True)
+    name = serializers.CharField(source="provider.name", read_only=True)
+    phone = serializers.CharField(source="provider.user.phone", read_only=True)
+
+    class Meta:
+        model = DoctorProfile
+        fields = (
+            "id", "provider_id", "name", "phone", "biography", "qualifications",
+            "experience_years", "languages", "fee_online", "fee_in_clinic",
+            "fee_home_visit", "consultation_modes", "clinic_name",
+            "clinic_address", "clinic_city", "is_online",
+            "auto_accept_appointments", "verification_status", "is_verified",
+            "rating_avg", "review_count", "created_at",
+        )
+        read_only_fields = ("id", "rating_avg", "review_count", "created_at")
+
+
+class AdminDoctorDetailAPIView(RetrieveUpdateDestroyAPIView):
+    """Admin: read, edit or remove one doctor's clinical profile."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = AdminDoctorProfileSerializer
+    queryset = DoctorProfile.objects.select_related("provider__user")
+
+    def destroy(self, request, *args, **kwargs):
+        doctor = self.get_object()
+        # Appointment.doctor cascades. Deleting a doctor who has consulted
+        # would silently erase those consultations — including completed ones
+        # holding prescription notes. Refuse, and point at the reversible move.
+        booked = Appointment.objects.filter(doctor=doctor).count()
+        if booked:
+            return Response(
+                {
+                    "detail": (
+                        f"This doctor has {booked} appointment(s). Deleting them "
+                        f"would erase that history. Set them offline or reject "
+                        f"their verification instead."
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+class AdminPatientSerializerWritable(AdminPatientSerializer):
+    """Same shape as the list, but the contactable fields accept writes."""
+
+    class Meta(AdminPatientSerializer.Meta):
+        read_only_fields = ("id", "phone", "date_joined")
+
+
+class AdminPatientDetailAPIView(RetrieveUpdateDestroyAPIView):
+    """Admin: read, correct or deactivate one patient."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = AdminPatientSerializerWritable
+    queryset = User.objects.filter(is_staff=False)
+
+    def get_queryset(self):
+        return User.objects.filter(is_staff=False).annotate(
+            appointment_count=Count("appointments", distinct=True),
+            order_count=Count("orders", distinct=True),
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        patient = self.get_object()
+        # Orders, appointments and payment transactions all cascade off the
+        # user. A patient with history is deactivated, never erased: the
+        # records are clinical and financial, and "delete the customer" must
+        # not quietly mean "delete the evidence".
+        if patient.appointment_count or patient.order_count:
+            if patient.is_active:
+                patient.is_active = False
+                patient.save(update_fields=["is_active"])
+            return Response(
+                {
+                    "detail": "Patient deactivated. Their orders and consultations are kept.",
+                    "deactivated": True,
+                },
+                status=status.HTTP_200_OK,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
 class AdminDiagnosticBookingSerializer(DiagnosticBookingSerializer):
     class Meta(DiagnosticBookingSerializer.Meta):
-        read_only_fields = ("id", "total_amount", "created_at")
+        # Admins reschedule and re-price bookings; only the identity and the
+        # audit timestamp are fixed.
+        read_only_fields = ("id", "created_at")
 
 class AdminDiagnosticBookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdmin]
     serializer_class = AdminDiagnosticBookingSerializer
     pagination_class = GenericPaginationClass
     queryset = DiagnosticBooking.objects.prefetch_related("tests").select_related("patient", "center")
-    filterset_fields = ["status"]
-    http_method_names = ["get", "patch", "head", "options"]
+    filterset_fields = ["status", "patient"]
+    # `tests__name` spans a many-to-many, so a booking with three matching
+    # tests would be returned three times; DRF's SearchFilter detects that
+    # and applies .distinct() for us.
+    search_fields = ["patient__name", "patient__phone", "tests__name"]
+    ordering_fields = ["created_at", "scheduled_date", "total_amount"]
+    http_method_names = ["get", "patch", "delete", "head", "options"]
 
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()

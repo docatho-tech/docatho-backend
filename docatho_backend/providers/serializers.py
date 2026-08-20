@@ -36,15 +36,57 @@ class ProviderBankSerializer(serializers.ModelSerializer):
 
 
 class AdminProviderSerializer(serializers.ModelSerializer):
-    """Read/update a provider (pharmacy/chemist/etc.) from the admin portal."""
+    """Read/update a provider (pharmacy/chemist/etc.) from the admin portal.
 
-    phone = serializers.CharField(source="user.phone", read_only=True)
-    email = serializers.EmailField(source="user.email", read_only=True, default=None)
+    ``phone`` and ``email`` live on the linked ``User`` and are writable here:
+    they were read-only, so a PATCH carrying a corrected phone number returned
+    200 with the old value still in place. Silently discarding a field an admin
+    just typed is worse than rejecting it.
+    """
+
+    phone = serializers.CharField(source="user.phone", required=False)
+    email = serializers.EmailField(
+        source="user.email",
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
     user_name = serializers.CharField(
         source="user.name",
         read_only=True,
         default=None,
     )
+
+    def validate_phone(self, value):
+        phone = (value or "").strip()
+        if not phone:
+            raise serializers.ValidationError("Phone is required.")
+
+        # Phone is USERNAME_FIELD but is not unique at the DB level, so nothing
+        # stops two users sharing one. That breaks sign-in for both, and this
+        # endpoint is the only place an admin can cause it.
+        clash = User.objects.filter(phone=phone)
+        if self.instance and self.instance.user_id:
+            clash = clash.exclude(pk=self.instance.user_id)
+        if clash.exists():
+            raise serializers.ValidationError(
+                "Another account already uses this phone number.",
+            )
+        return phone
+
+    def update(self, instance, validated_data):
+        # `source="user.x"` nests the writable user fields under "user".
+        user_data = validated_data.pop("user", {})
+        if user_data:
+            user = instance.user
+            if user is None:
+                raise serializers.ValidationError(
+                    {"phone": "This partner has no linked login to update."},
+                )
+            for field, value in user_data.items():
+                setattr(user, field, value or None if field == "email" else value)
+            user.save(update_fields=list(user_data.keys()))
+        return super().update(instance, validated_data)
 
     class Meta:
         model = Provider
