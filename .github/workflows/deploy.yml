@@ -3,10 +3,12 @@ name: Deploy
 # Deploys to the EC2 host after the CI workflow succeeds on master.
 # Also runnable on demand via the Actions tab (workflow_dispatch).
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [master]
+  # PAUSED — automatic deploy-after-CI disabled alongside the CI workflow.
+  # Uncomment to resume. Manual deploys via workflow_dispatch still work.
+  # workflow_run:
+  #   workflows: ["CI"]
+  #   types: [completed]
+  #   branches: [master]
   workflow_dispatch:
 
 concurrency:
