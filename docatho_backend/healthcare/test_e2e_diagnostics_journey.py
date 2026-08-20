@@ -41,7 +41,9 @@ def test_diagnostic_booking_full_lifecycle(auth_client):
 
     admin_list = admin_client.get("/api/healthcare/admin/diagnostic-bookings/")
     assert admin_list.status_code == 200
-    assert any(b["id"] == booking_id for b in admin_list.data.get("results", admin_list.data))
+    assert any(
+        b["id"] == booking_id for b in admin_list.data.get("results", admin_list.data)
+    )
 
     for status in (
         DiagnosticBookingStatus.CONFIRMED,

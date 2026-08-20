@@ -32,7 +32,9 @@ def test_support_ticket_patient_create_admin_lists(auth_client):
 
     admin_list = admin_client.get("/api/healthcare/support-tickets/")
     assert admin_list.status_code == 200
-    assert any(t["id"] == ticket_id for t in admin_list.data.get("results", admin_list.data))
+    assert any(
+        t["id"] == ticket_id for t in admin_list.data.get("results", admin_list.data)
+    )
 
     stats = admin_client.get("/api/healthcare/admin/dashboard-stats/")
     assert stats.status_code == 200

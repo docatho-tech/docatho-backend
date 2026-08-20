@@ -21,7 +21,9 @@ class FakeRpResponse:
         return self._data
 
 
-def razorpay_signature(order_id: str, payment_id: str, secret: str = RAZORPAY_TEST_SECRET) -> str:
+def razorpay_signature(
+    order_id: str, payment_id: str, secret: str = RAZORPAY_TEST_SECRET
+) -> str:
     msg = f"{order_id}|{payment_id}".encode()
     return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
 

@@ -41,7 +41,9 @@ def _book_online(patient_client, doctor, scheduled_at):
 def _pay_appointment(patient_client, appt_id, fee: Decimal):
     rp_order = mock_razorpay_order(RP_ORDER_ID, fee)
     with patch_appointment_razorpay(rp_order):
-        checkout = patient_client.post(f"/api/healthcare/appointments/{appt_id}/checkout/")
+        checkout = patient_client.post(
+            f"/api/healthcare/appointments/{appt_id}/checkout/"
+        )
     assert checkout.status_code == 200, checkout.data
 
     confirm = patient_client.post(
@@ -58,7 +60,9 @@ def _pay_appointment(patient_client, appt_id, fee: Decimal):
     return confirm
 
 
-def test_full_online_appointment_journey_book_pay_video_complete_rate(auth_client, settings):
+def test_full_online_appointment_journey_book_pay_video_complete_rate(
+    auth_client, settings
+):
     settings.RAZORPAY_KEY_SECRET = RAZORPAY_TEST_SECRET
     settings.RAZORPAY_KEY_ID = "rzp_test_id"
 
@@ -84,7 +88,9 @@ def test_full_online_appointment_journey_book_pay_video_complete_rate(auth_clien
         scheduled_at=timezone.now() + timedelta(minutes=5),
     )
 
-    patient_token = patient_client.post(f"/api/healthcare/appointments/{appt_id}/video-token/")
+    patient_token = patient_client.post(
+        f"/api/healthcare/appointments/{appt_id}/video-token/"
+    )
     assert patient_token.status_code == 200, patient_token.data
     assert patient_token.data["auth_token"]
 
@@ -170,5 +176,7 @@ def test_video_token_blocked_before_payment(auth_client):
         fee=doctor.fee_online,
         payment_status=AppointmentPaymentStatus.PENDING,
     )
-    res = auth_client(patient).post(f"/api/healthcare/appointments/{appt.id}/video-token/")
+    res = auth_client(patient).post(
+        f"/api/healthcare/appointments/{appt.id}/video-token/"
+    )
     assert res.status_code == 403
