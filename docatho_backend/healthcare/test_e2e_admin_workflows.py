@@ -61,3 +61,29 @@ def test_patient_reads_published_content_pages(auth_client):
     assert resp.status_code == 200
     results = resp.data.get("results", resp.data)
     assert any(p["title"] == "Privacy Policy" for p in results)
+
+
+def test_duplicate_availability_slot_is_refused_with_400_not_500(auth_client):
+    """A repeat slot must be a validation error, not an IntegrityError.
+
+    `doctor` is injected in `perform_create` rather than declared on the
+    serializer, so DRF could not build the UniqueTogetherValidator for the
+    model's `unique_together` and the duplicate reached Postgres — surfacing as
+    a 500 with a debug page in the body.
+    """
+    admin = AdminUserFactory()
+    doctor = DoctorProfileFactory()
+    payload = {
+        "doctor": doctor.id,
+        "day_of_week": 6,
+        "start_time": "06:15",
+        "end_time": "06:45",
+        "consultation_mode": "online",
+    }
+
+    first = auth_client(admin).post("/api/healthcare/admin/availability/", payload)
+    assert first.status_code == 201, first.data
+
+    second = auth_client(admin).post("/api/healthcare/admin/availability/", payload)
+    assert second.status_code == 400, second.data
+    assert "start_time" in second.data

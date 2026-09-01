@@ -34,3 +34,16 @@ WEB_CONCURRENCY=4
 # Redis
 # ------------------------------------------------------------------------------
 REDIS_URL=redis://redis:6379/0
+
+
+# 100ms video consultations
+# ------------------------------------------------------------------------------
+# This file is TRACKED IN GIT — leave the secret blank here and inject the real
+# value from the deploy environment. With these unset the backend silently falls
+# back to mock rooms (`dev-room-<id>`) and video never connects.
+HMS_APP_ACCESS_KEY=
+HMS_APP_SECRET=
+HMS_TEMPLATE_ID=6a8811b806e552af73b9df37
+HMS_PATIENT_ROLE=guest
+HMS_DOCTOR_ROLE=host
+HMS_SUBDOMAIN=docatho-videoconf-1421

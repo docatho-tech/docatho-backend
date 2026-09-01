@@ -32,6 +32,11 @@ router.register(
     views.AdminDoctorAvailabilityViewSet,
     basename="admin-availability",
 )
+router.register(
+    "admin/blocked-dates",
+    views.AdminBlockedDateViewSet,
+    basename="admin-blocked-date",
+)
 
 urlpatterns = [
     path("doctors/", views.DoctorListAPIView.as_view(), name="doctor-list"),

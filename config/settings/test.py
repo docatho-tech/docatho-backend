@@ -34,5 +34,17 @@ TEMPLATES[0]["OPTIONS"]["debug"] = True  # type: ignore[index]
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "http://media.testserver/"
+# 100ms
+# ------------------------------------------------------------------------------
+# Forced off. `base.py` reads real credentials from `.env`, and with them set
+# `ensure_video_room` calls the live 100ms API during unit tests — that made the
+# suite network-dependent and littered the account with `docatho-appt-*` rooms.
+# Blanking the keys puts the video tests back on `dev_mock_token`, which is what
+# they assert against. Live coverage lives elsewhere: `manage.py check_hms` and
+# the Playwright suite (`docatho_dashboard/e2e/video-call.spec.ts`).
+HMS_APP_ACCESS_KEY = ""
+HMS_APP_SECRET = ""
+HMS_TEMPLATE_ID = ""
+
 # Your stuff...
 # ------------------------------------------------------------------------------

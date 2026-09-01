@@ -48,6 +48,7 @@ class HMSClient:
         self.template_id = template_id or getattr(settings, "HMS_TEMPLATE_ID", "")
         self.patient_role = getattr(settings, "HMS_PATIENT_ROLE", "guest")
         self.doctor_role = getattr(settings, "HMS_DOCTOR_ROLE", "host")
+        self.subdomain = getattr(settings, "HMS_SUBDOMAIN", "")
 
     @property
     def is_configured(self) -> bool:
@@ -78,6 +79,31 @@ class HMSClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def room_codes(self, room_id: str) -> dict[str, str]:
+        """Return {role: code} for a room, creating the codes if they don't exist.
+
+        Room codes are what the browser-based 100ms prebuilt app joins with. The
+        native apps don't use them — they join with `auth_token` — but they make
+        a real call reachable from a browser, which is what the E2E suite needs.
+        """
+        token = self.management_token()
+        resp = requests.post(
+            f"{HMS_API_BASE}/room-codes/room/{room_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return {
+            entry["role"]: entry["code"]
+            for entry in resp.json().get("data", [])
+            if entry.get("enabled", True)
+        }
+
+    def prebuilt_url(self, code: str) -> str:
+        if not self.subdomain:
+            raise HMSNotConfiguredError("HMS_SUBDOMAIN is not set")
+        return f"https://{self.subdomain}.app.100ms.live/meeting/{code}"
 
     def auth_token(self, room_id: str, user_id: str, role: str) -> str:
         if not self.is_configured:

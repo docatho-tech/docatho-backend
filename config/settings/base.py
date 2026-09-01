@@ -51,6 +51,9 @@ HMS_APP_SECRET = env("HMS_APP_SECRET", default="")
 HMS_TEMPLATE_ID = env("HMS_TEMPLATE_ID", default="")
 HMS_PATIENT_ROLE = env("HMS_PATIENT_ROLE", default="guest")
 HMS_DOCTOR_ROLE = env("HMS_DOCTOR_ROLE", default="host")
+# 100ms app subdomain — only used to build browser-joinable prebuilt URLs
+# (https://<subdomain>.app.100ms.live/meeting/<room-code>) for E2E and support.
+HMS_SUBDOMAIN = env("HMS_SUBDOMAIN", default="")
 
 # Local time zone. Choices are
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name

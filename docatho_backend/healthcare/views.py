@@ -36,6 +36,7 @@ from docatho_backend.healthcare.models import DiagnosticBooking
 from docatho_backend.healthcare.models import DiagnosticBookingStatus
 from docatho_backend.healthcare.models import DiagnosticTest
 from docatho_backend.healthcare.models import DiagnosticTestCategory
+from docatho_backend.healthcare.models import BlockedDate
 from docatho_backend.healthcare.models import DoctorAvailability
 from docatho_backend.healthcare.models import DoctorProfile
 from docatho_backend.healthcare.models import MedicalSpecialty
@@ -1222,6 +1223,68 @@ class AdminDoctorAvailabilityViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         doctor_id = self.request.data.get("doctor")
         doctor = get_object_or_404(DoctorProfile, pk=doctor_id)
+
+        # `doctor` is injected here rather than declared on the serializer, so
+        # DRF cannot build the UniqueTogetherValidator for the model's
+        # unique_together and a repeat slot reached the database as an
+        # IntegrityError — a 500 with a debug page in the body. The dashboard
+        # guards this client-side, but only against the slot list it has
+        # already loaded, so a stale drawer (or any other API client) could
+        # still trigger it.
+        data = serializer.validated_data
+        clash = DoctorAvailability.objects.filter(
+            doctor=doctor,
+            day_of_week=data["day_of_week"],
+            start_time=data["start_time"],
+            consultation_mode=data.get(
+                "consultation_mode", ConsultationMode.ONLINE
+            ),
+        ).exists()
+        if clash:
+            raise serializers.ValidationError(
+                {"start_time": "This doctor already has a slot at that time."},
+            )
+
+        serializer.save(doctor=doctor)
+
+
+class BlockedDateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BlockedDate
+        fields = ("id", "date", "reason")
+
+
+class AdminBlockedDateViewSet(viewsets.ModelViewSet):
+    """Admin: a doctor's days off.
+
+    ``BlockedDate`` existed but nothing could write one — not the provider app,
+    not the admin. Weekly slots therefore repeated forever, so a doctor on
+    leave kept taking bookings for days they were away.
+    """
+
+    permission_classes = [IsAdmin]
+    serializer_class = BlockedDateSerializer
+    pagination_class = GenericPaginationClass
+    queryset = BlockedDate.objects.select_related("doctor__provider")
+    filterset_fields = ["doctor"]
+    ordering = ["date"]
+
+    def perform_create(self, serializer):
+        doctor = get_object_or_404(
+            DoctorProfile,
+            pk=self.request.data.get("doctor"),
+        )
+        # `doctor` is injected rather than declared on the serializer, so DRF
+        # cannot build the UniqueTogetherValidator for the model's
+        # unique_together — a repeat date would reach the DB as an
+        # IntegrityError, i.e. a 500 instead of a 400.
+        if BlockedDate.objects.filter(
+            doctor=doctor,
+            date=serializer.validated_data["date"],
+        ).exists():
+            raise serializers.ValidationError(
+                {"date": "This doctor is already blocked on that date."},
+            )
         serializer.save(doctor=doctor)
 
 
@@ -1290,6 +1353,7 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
     provider_id = serializers.IntegerField(source="provider.id", read_only=True)
     name = serializers.CharField(source="provider.name", read_only=True)
     phone = serializers.CharField(source="provider.user.phone", read_only=True)
+    specialty = serializers.CharField(source="provider.specialty", read_only=True)
 
     class Meta:
         model = DoctorProfile
@@ -1298,6 +1362,7 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "provider_id",
             "name",
             "phone",
+            "specialty",
             "biography",
             "qualifications",
             "experience_years",
