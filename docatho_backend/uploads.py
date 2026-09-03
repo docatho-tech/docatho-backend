@@ -65,7 +65,12 @@ class ImageUploadView(APIView):
         name = f"uploads/{uuid.uuid4().hex}{suffix}"
         saved = default_storage.save(name, upload)
 
+        # Always absolute. S3 storage answers with a full URL, but local disk
+        # answers "/media/..." — and the clients are served from other origins
+        # (the dashboard on Amplify or :5173), so a relative path would resolve
+        # against *their* host and 404. build_absolute_uri leaves an already
+        # absolute URL alone, so this is right under either backend.
         return Response(
-            {"url": default_storage.url(saved)},
+            {"url": request.build_absolute_uri(default_storage.url(saved))},
             status=status.HTTP_201_CREATED,
         )

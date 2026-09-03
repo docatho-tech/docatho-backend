@@ -55,6 +55,21 @@ def test_admin_can_upload_an_image(admin_client):
     assert response.data["url"].endswith(".png")
 
 
+def test_the_returned_url_is_absolute(admin_client):
+    """The dashboard is served from another origin.
+
+    Local-disk storage answers "/media/...", which the browser would resolve
+    against the dashboard's host rather than the API's, so the <img> 404s and
+    the saved picture looks broken.
+    """
+    response = admin_client.post(
+        UPLOAD_URL, {"file": png_upload()}, format="multipart",
+    )
+
+    assert response.status_code == 201, response.data
+    assert response.data["url"].startswith("http"), response.data["url"]
+
+
 def test_the_stored_name_does_not_come_from_the_client(admin_client):
     """The filename decides where the bytes land, so it is never trusted.
 
