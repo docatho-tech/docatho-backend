@@ -139,3 +139,41 @@ def test_a_non_admin_cannot_add_a_qualification(db):
     )
 
     assert response.status_code == 403
+
+
+def test_the_phone_number_is_editable(admin_client, doctor):
+    response = admin_client.patch(
+        url_for(doctor), {"phone": "+919000009999"}, format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    doctor.provider.user.refresh_from_db()
+    assert str(doctor.provider.user.phone) == "+919000009999"
+
+
+def test_a_phone_another_account_uses_is_refused(admin_client, doctor):
+    """`User.phone` is the login field and has no unique constraint.
+
+    `AdminLoginView` does `User.objects.get(phone=...)`, so a duplicate makes
+    that query raise MultipleObjectsReturned — locking both accounts out.
+    """
+    User.objects.create_user(phone="+919000008888", password="pw")
+
+    response = admin_client.patch(
+        url_for(doctor), {"phone": "+919000008888"}, format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    doctor.provider.user.refresh_from_db()
+    assert str(doctor.provider.user.phone) == "+919000000011"
+
+
+def test_resaving_a_doctors_own_number_is_allowed(admin_client, doctor):
+    """The clash check must exclude the record being edited."""
+    response = admin_client.patch(
+        url_for(doctor),
+        {"phone": "+919000000011", "clinic_city": "Raipur"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data

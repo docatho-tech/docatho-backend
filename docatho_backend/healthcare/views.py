@@ -1465,9 +1465,33 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
 
     provider_id = serializers.IntegerField(source="provider.id", read_only=True)
     name = serializers.CharField(source="provider.name", read_only=True)
-    phone = serializers.CharField(source="provider.user.phone", read_only=True)
+    # Writable, unlike name: it is the doctor's contact number *and* their
+    # login (`USERNAME_FIELD = "phone"`), so support needs to correct a typo
+    # here rather than send the doctor away to re-register.
+    phone = serializers.CharField(source="provider.user.phone", required=False)
     specialty = serializers.CharField(source="provider.specialty", read_only=True)
     specialties = MedicalSpecialtySerializer(many=True, read_only=True)
+
+    def validate_phone(self, value):
+        """Refuse a number another account already answers to.
+
+        `User.phone` is the login field but carries no unique constraint
+        (auth.W004). `AdminLoginView` does `User.objects.get(phone=...)`, so a
+        duplicate does not merely confuse the directory — it makes that query
+        raise MultipleObjectsReturned and locks *both* accounts out with a 500.
+        """
+        phone = (value or "").strip()
+        if not phone:
+            msg = "A phone number is required."
+            raise serializers.ValidationError(msg)
+
+        clash = User.objects.filter(phone=phone)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.provider.user_id)
+        if clash.exists():
+            msg = "Another account already uses this number."
+            raise serializers.ValidationError(msg)
+        return phone
     # The M2M was read-only in every serializer, so the dashboard's Specialties
     # manager wrote rows that nothing could ever attach to a doctor — and the
     # patient app's specialty browse returned an empty list forever.
@@ -1535,6 +1559,17 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
         "Dermatologist" could display "Cardiologist" indefinitely. Deriving one
         from the other on save leaves a single place to get it wrong.
         """
+        # `source="provider.user.phone"` nests into validated_data as
+        # {"provider": {"user": {"phone": ...}}}, which ModelSerializer.update
+        # cannot write — it would try to set a `provider` attribute on the
+        # profile. Pull it out and save the owning row directly.
+        provider_data = validated_data.pop("provider", {})
+        phone = (provider_data.get("user") or {}).get("phone")
+        if phone:
+            user = instance.provider.user
+            user.phone = phone
+            user.save(update_fields=["phone"])
+
         doctor = super().update(instance, validated_data)
         if "specialties" in validated_data:
             names = list(doctor.specialties.values_list("name", flat=True))
