@@ -40,7 +40,7 @@ class MedicineViewset(viewsets.ModelViewSet):
         "is_prescription_required",
     ]
     search_fields = ["name", "brand", "manufacturer", "description"]
-    ordering_fields = ["created_at", "updated_at", "name", "price"]
+    ordering_fields = ["created_at", "updated_at", "name", "price", "stock"]
 
 
 class AdminMedicineViewset(viewsets.ModelViewSet):
@@ -58,4 +58,4 @@ class AdminMedicineViewset(viewsets.ModelViewSet):
         "is_prescription_required",
     ]
     search_fields = ["name", "brand", "manufacturer", "description"]
-    ordering_fields = ["created_at", "updated_at", "name", "price"]
+    ordering_fields = ["created_at", "updated_at", "name", "price", "stock"]

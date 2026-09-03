@@ -91,6 +91,7 @@ class DoctorListSerializer(serializers.ModelSerializer):
             "review_count",
             "clinic_name",
             "clinic_city",
+            "profile_picture",
             "is_online",
             "is_verified",
             "verification_status",
@@ -246,6 +247,7 @@ class DiagnosticTestSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "preparation_instructions",
+            "images",
             "is_active",
         )
 
@@ -649,12 +651,16 @@ class SavedDoctorAPIView(APIView):
 
 
 class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
-    queryset = MedicalSpecialty.objects.filter(is_active=True)
+    queryset = MedicalSpecialty.objects.all()
     serializer_class = MedicalSpecialtySerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
     filterset_fields = ["is_active", "name"]
     search_fields = ["name"]
+    ordering_fields = ["name", "created_at"]
+
+    def get_queryset(self):
+        return _visible_to(super().get_queryset(), self.request)
 
 
 class AppointmentViewSet(viewsets.ModelViewSet):
@@ -821,22 +827,46 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return Response(AppointmentSerializer(appointment).data)
 
 
+def _visible_to(queryset, request):
+    """Hide deactivated rows from patients; show them all to staff.
+
+    These querysets were hardcoded to ``is_active=True``, so an admin who
+    unchecked "Bookable by patients" watched the row vanish from the dashboard
+    with no filter and no URL that could bring it back — and every subsequent
+    PATCH 404'd, because the object was outside the viewset's own queryset.
+    Recovery meant Django admin or SQL. ``MedicineViewset`` never had the bug,
+    which is why the Medicines page's Active/Inactive filter works.
+    """
+    user = getattr(request, "user", None)
+    if user is not None and user.is_authenticated and user.is_staff:
+        return queryset
+    return queryset.filter(is_active=True)
+
+
 class DiagnosticTestCategoryViewSet(viewsets.ModelViewSet):
-    queryset = DiagnosticTestCategory.objects.filter(is_active=True)
+    queryset = DiagnosticTestCategory.objects.all()
     serializer_class = DiagnosticTestCategorySerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
     filterset_fields = ["is_active", "name"]
     search_fields = ["name"]
+    ordering_fields = ["name", "created_at"]
+
+    def get_queryset(self):
+        return _visible_to(super().get_queryset(), self.request)
 
 
 class DiagnosticTestViewSet(viewsets.ModelViewSet):
-    queryset = DiagnosticTest.objects.filter(is_active=True).select_related("category")
+    queryset = DiagnosticTest.objects.all().select_related("category")
     serializer_class = DiagnosticTestSerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
     filterset_fields = ["category", "is_active"]
     search_fields = ["name", "description"]
+    ordering_fields = ["name", "price", "created_at"]
+
+    def get_queryset(self):
+        return _visible_to(super().get_queryset(), self.request)
 
 
 class DiagnosticBookingViewSet(viewsets.ModelViewSet):
@@ -886,6 +916,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
     # Admins triage by subject or by who raised the ticket; customers only
     # ever search their own queryset, so the reporter fields are safe here.
     search_fields = ["subject", "description", "user__name", "user__phone"]
+    ordering_fields = ["created_at", "status"]
 
     def get_permissions(self):
         if self.action in ("list", "retrieve") and self.request.user.is_staff:
@@ -906,6 +937,7 @@ class ContentPageViewSet(viewsets.ModelViewSet):
     pagination_class = GenericPaginationClass
     filterset_fields = ["page_type", "is_published"]
     search_fields = ["title", "body"]
+    ordering_fields = ["title", "sort_order", "updated_at"]
 
     def get_queryset(self):
         qs = ContentPage.objects.all()
@@ -1154,9 +1186,12 @@ class AdminPatientListAPIView(ListAPIView):
     permission_classes = [IsAdmin]
     serializer_class = AdminPatientSerializer
     pagination_class = GenericPaginationClass
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    # OrderingFilter is a project-wide default backend; naming the list here
+    # dropped it, so `?ordering=` was silently ignored on this endpoint.
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["is_active"]
     search_fields = ["name", "phone", "email"]
+    ordering_fields = ["name", "date_joined"]
 
     def get_queryset(self):
         return (
@@ -1174,9 +1209,10 @@ class AdminDoctorListAPIView(ListAPIView):
     permission_classes = [IsAdmin]
     serializer_class = AdminDoctorSerializer
     pagination_class = GenericPaginationClass
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["verification_status", "is_verified"]
     search_fields = ["provider__name", "provider__user__phone", "clinic_city"]
+    ordering_fields = ["provider__name", "experience_years", "rating_avg", "created_at"]
 
     def get_queryset(self):
         return DoctorProfile.objects.select_related("provider__user").order_by(
@@ -1293,6 +1329,12 @@ class AdminPrescriptionSerializer(serializers.ModelSerializer):
     user_phone = serializers.CharField(source="user.phone", read_only=True)
     image_url = serializers.SerializerMethodField()
     order_count = serializers.SerializerMethodField()
+    orders = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.CharField(
+        source="reviewed_by.name",
+        read_only=True,
+        default=None,
+    )
 
     class Meta:
         model = Prescription
@@ -1305,9 +1347,18 @@ class AdminPrescriptionSerializer(serializers.ModelSerializer):
             "status",
             "notes",
             "order_count",
+            "orders",
+            "reviewed_by_name",
+            "reviewed_at",
             "created_at",
         )
-        read_only_fields = ("id", "user", "created_at")
+        read_only_fields = (
+            "id",
+            "user",
+            "created_at",
+            "reviewed_at",
+            "reviewed_by_name",
+        )
 
     def get_image_url(self, obj) -> str | None:
         if not obj.image:
@@ -1318,6 +1369,34 @@ class AdminPrescriptionSerializer(serializers.ModelSerializer):
 
     def get_order_count(self, obj) -> int:
         return obj.orders.count()
+
+    def get_orders(self, obj) -> list[dict]:
+        """What this document is actually authorising.
+
+        The reviewer used to see an image, a bare order count and nothing else
+        — no line items and no drug schedule, which is the only fact that
+        decides whether a prescription is required at all. Approving without
+        them is approving a JPEG.
+        """
+        return [
+            {
+                "id": order.id,
+                "order_number": order.order_number,
+                "status": order.status,
+                "total": str(order.total),
+                "items": [
+                    {
+                        "id": item.id,
+                        "name": item.medicine.name,
+                        "schedule": item.medicine.schedule,
+                        "quantity": item.quantity,
+                        "prescription_required": item.prescription_required,
+                    }
+                    for item in order.items.all()
+                ],
+            }
+            for order in obj.orders.all()
+        ]
 
 
 class AdminPrescriptionViewSet(viewsets.ModelViewSet):
@@ -1333,13 +1412,31 @@ class AdminPrescriptionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdmin]
     serializer_class = AdminPrescriptionSerializer
     pagination_class = GenericPaginationClass
-    queryset = Prescription.objects.select_related("user").prefetch_related("orders")
+    queryset = Prescription.objects.select_related("user", "reviewed_by").prefetch_related(
+        "orders__items__medicine",
+    )
     filterset_fields = ["status", "user"]
     search_fields = ["user__name", "user__phone", "notes"]
     ordering_fields = ["created_at", "status"]
     # Documents are uploaded by the patient and are evidence; an admin
     # reviews them, never edits or destroys them.
     http_method_names = ["get", "patch", "head", "options"]
+
+    def perform_update(self, serializer):
+        """Stamp who decided, and when.
+
+        Only on a real decision — a PATCH that leaves the status pending (an
+        admin saving a note mid-review) must not claim the document was
+        reviewed.
+        """
+        decided = serializer.validated_data.get("status", serializer.instance.status)
+        if decided != Prescription.Status.PENDING:
+            serializer.save(
+                reviewed_by=self.request.user,
+                reviewed_at=timezone.now(),
+            )
+        else:
+            serializer.save()
 
 
 class AdminDoctorProfileSerializer(serializers.ModelSerializer):
@@ -1354,6 +1451,17 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source="provider.name", read_only=True)
     phone = serializers.CharField(source="provider.user.phone", read_only=True)
     specialty = serializers.CharField(source="provider.specialty", read_only=True)
+    specialties = MedicalSpecialtySerializer(many=True, read_only=True)
+    # The M2M was read-only in every serializer, so the dashboard's Specialties
+    # manager wrote rows that nothing could ever attach to a doctor — and the
+    # patient app's specialty browse returned an empty list forever.
+    specialty_ids = serializers.PrimaryKeyRelatedField(
+        source="specialties",
+        queryset=MedicalSpecialty.objects.all(),
+        many=True,
+        required=False,
+        write_only=True,
+    )
 
     class Meta:
         model = DoctorProfile
@@ -1363,6 +1471,8 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "name",
             "phone",
             "specialty",
+            "specialties",
+            "specialty_ids",
             "biography",
             "qualifications",
             "experience_years",
@@ -1374,6 +1484,7 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "clinic_name",
             "clinic_address",
             "clinic_city",
+            "profile_picture",
             "is_online",
             "auto_accept_appointments",
             "verification_status",

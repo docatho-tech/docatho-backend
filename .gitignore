@@ -269,6 +269,10 @@ dump.rdb
 
 ### Project template
 docatho_backend/media/
+docatho_backend/static/uploads/
+
+# Local resume state for seed_prod_via_api.py — machine-specific, never shared.
+.seed_prod_progress.jsonl
 
 .pytest_cache/
 

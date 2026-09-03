@@ -61,6 +61,15 @@ class DoctorProfile(BaseModel):
         max_digits=9, decimal_places=6, null=True, blank=True,
     )
     clinic_images = models.JSONField(default=list, blank=True)
+    # A stored URL rather than an ImageField, matching `clinic_images` and
+    # `Medicine.image_url`: the bytes go to S3 through /api/uploads/ and only
+    # the address is kept, so every image in the product is addressed one way.
+    #
+    # CharField, not URLField: /api/uploads/ answers with whatever the active
+    # storage backend calls the file, which is an absolute S3 URL in production
+    # but a relative "/media/..." path on local disk. URLField rejects the
+    # latter, so the field could not hold its own endpoint's output off S3.
+    profile_picture = models.CharField(max_length=500, blank=True, default="")
     license_document = models.FileField(upload_to="licenses/", blank=True, null=True)
     degree_document = models.FileField(upload_to="degrees/", blank=True, null=True)
     verification_status = models.CharField(
@@ -235,6 +244,10 @@ class DiagnosticTest(BaseModel):
     description = models.TextField(blank=True, default="")
     price = models.DecimalField(max_digits=10, decimal_places=2)
     preparation_instructions = models.TextField(blank=True, default="")
+    # A list of image URLs uploaded through /api/uploads/, same shape as
+    # `DoctorProfile.clinic_images`. A test can show a sample report, the
+    # equipment and the collection kit, so one field would not do.
+    images = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:

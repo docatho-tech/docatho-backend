@@ -41,6 +41,18 @@ class Prescription(BaseModel):
     )
     notes = models.TextField(blank=True, null=True)
 
+    # Who cleared this document, and when. Approving a Schedule H/H1/X
+    # prescription is a regulated decision made on a shared ops login; the note
+    # was stored but the decision was attributable to nobody.
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="prescriptions_reviewed",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ("-created_at",)
 

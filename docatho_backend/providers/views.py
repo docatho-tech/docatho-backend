@@ -15,6 +15,7 @@ from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from docatho_backend.healthcare.models import Appointment
 from docatho_backend.masters.permissions import IsAdmin
 from docatho_backend.masters.permissions import IsProvider
 from docatho_backend.orders.analytics import REVENUE_Q
@@ -59,9 +60,12 @@ class AdminProviderListCreateAPIView(ListCreateAPIView):
 
     permission_classes = [IsAdmin]
     pagination_class = GenericPaginationClass
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    # OrderingFilter is a project-wide default backend; naming the list here
+    # dropped it, so `?ordering=` was silently ignored on this endpoint.
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["provider_type"]
     search_fields = ["name", "specialty", "user__name", "user__phone"]
+    ordering_fields = ["name", "provider_type", "created_at"]
     queryset = Provider.objects.select_related("user").all().order_by("-created_at")
 
     def get_serializer_class(self):
@@ -85,6 +89,34 @@ class AdminProviderDetailAPIView(RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdmin]
     serializer_class = AdminProviderSerializer
     queryset = Provider.objects.select_related("user").all()
+
+    def destroy(self, request, *args, **kwargs):
+        """Refuse to delete a provider whose deletion would erase history.
+
+        ``DoctorProfile.provider`` and ``Appointment.doctor`` are both
+        ``CASCADE``, so deleting a doctor's provider row takes every
+        consultation with it — the exact loss ``AdminDoctorDetailAPIView``
+        refuses. This endpoint had no guard at all, and the dashboard's dialog
+        described it as a loss of access, so removing a partner from
+        ``/partners`` silently destroyed clinical records that the same
+        deletion from ``/doctors`` correctly refused.
+
+        Orders are safe: ``Order.assigned_provider`` is ``SET_NULL``.
+        """
+        provider = self.get_object()
+        booked = Appointment.objects.filter(doctor__provider=provider).count()
+        if booked:
+            return Response(
+                {
+                    "detail": (
+                        f"{provider.name} has {booked} appointment(s). Deleting "
+                        f"them would erase that consultation history. Set them "
+                        f"offline instead."
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class SendOTPAPIView(APIView):

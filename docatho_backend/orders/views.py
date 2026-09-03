@@ -493,6 +493,7 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
         "user",
     ]
     search_fields = ["order_number", "user__name", "user__phone"]
+    ordering_fields = ["order_number", "total", "status", "placed_at"]
     queryset = Order.objects.all().order_by("-placed_at")
 
     @action(detail=True, methods=["patch"], url_path="update-status")
