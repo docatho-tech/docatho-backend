@@ -221,6 +221,48 @@ MEDIA_ROOT = str(APPS_DIR.path("static"))
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "/media/"
 
+# Uploaded media goes to S3 whenever AWS credentials are configured, whichever
+# settings module is in use.
+#
+# The server runs `config.settings.local`, so without this every prescription,
+# doctor photo and product image landed on that one box's disk: not backed up,
+# not replicated, and gone with the instance. Keying off the credentials rather
+# than the settings module means a developer with no AWS keys still writes to
+# ./static and needs no setup, while any deployment that has them uses the
+# bucket. `config.settings.production` sets its own STORAGES afterwards and is
+# unaffected either way.
+#
+# Static files are deliberately left alone: moving them would make every deploy
+# depend on `collectstatic` reaching S3, which is a bigger change than "put the
+# uploads somewhere durable".
+AWS_ACCESS_KEY_ID = env("DJANGO_AWS_ACCESS_KEY_ID", default="")
+if AWS_ACCESS_KEY_ID:
+    AWS_SECRET_ACCESS_KEY = env("DJANGO_AWS_SECRET_ACCESS_KEY")
+    AWS_STORAGE_BUCKET_NAME = env("DJANGO_AWS_STORAGE_BUCKET_NAME")
+    AWS_S3_REGION_NAME = env("DJANGO_AWS_S3_REGION_NAME", default=None)
+    AWS_S3_CUSTOM_DOMAIN = env("DJANGO_AWS_S3_CUSTOM_DOMAIN", default=None)
+    # Unsigned URLs: these are addresses stored in the database and rendered by
+    # three clients, so they must not expire. Objects under media/ therefore
+    # have to be publicly readable via a bucket policy.
+    AWS_QUERYSTRING_AUTH = False
+    _AWS_EXPIRY = 60 * 60 * 24 * 7
+    AWS_S3_OBJECT_PARAMETERS = {
+        "CacheControl": f"max-age={_AWS_EXPIRY}, s-maxage={_AWS_EXPIRY}, must-revalidate",
+    }
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            "OPTIONS": {"location": "media", "file_overwrite": False},
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+    _aws_domain = (
+        AWS_S3_CUSTOM_DOMAIN or f"{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com"
+    )
+    MEDIA_URL = f"https://{_aws_domain}/media/"
+
 # TEMPLATES
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#templates

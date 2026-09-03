@@ -34,6 +34,18 @@ TEMPLATES[0]["OPTIONS"]["debug"] = True  # type: ignore[index]
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "http://media.testserver/"
+
+# base.py switches media to S3 when AWS credentials are present, and the test
+# settings inherit the developer's `.env`. Without this the suite would write
+# every uploaded fixture into the live bucket — the same trap the HMS keys
+# below were blanked for.
+AWS_ACCESS_KEY_ID = ""
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 # 100ms
 # ------------------------------------------------------------------------------
 # Forced off. `base.py` reads real credentials from `.env`, and with them set
