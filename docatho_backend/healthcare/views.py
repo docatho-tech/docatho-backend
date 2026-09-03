@@ -1528,9 +1528,8 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "clinic_longitude",
             "clinic_images",
             "profile_picture",
-            # Read-only: uploaded by the doctor through the provider app. The
-            # Approve/Reject decision was being taken without them being
-            # visible on any screen.
+            # Admin-writable: no endpoint ever accepted these as uploads, so
+            # onboarding a doctor meant approving them with no documents at all.
             "license_document",
             "degree_document",
             "is_online",
@@ -1546,8 +1545,6 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "rating_avg",
             "review_count",
             "created_at",
-            "license_document",
-            "degree_document",
         )
 
     def update(self, instance, validated_data):

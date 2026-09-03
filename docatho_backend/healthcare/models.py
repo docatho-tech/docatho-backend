@@ -89,8 +89,13 @@ class DoctorProfile(BaseModel):
     # but a relative "/media/..." path on local disk. URLField rejects the
     # latter, so the field could not hold its own endpoint's output off S3.
     profile_picture = models.CharField(max_length=500, blank=True, default="")
-    license_document = models.FileField(upload_to="licenses/", blank=True, null=True)
-    degree_document = models.FileField(upload_to="degrees/", blank=True, null=True)
+    # URLs from /api/uploads/, like `profile_picture`, rather than FileFields.
+    # Nothing ever wrote them as files — no endpoint accepted an upload, so a
+    # doctor was approved on the strength of the profile text alone. Storing a
+    # URL means one upload path for every document in the product, and it takes
+    # PDFs, which is what a licence usually is.
+    license_document = models.CharField(max_length=500, blank=True, default="")
+    degree_document = models.CharField(max_length=500, blank=True, default="")
     verification_status = models.CharField(
         max_length=20,
         choices=VerificationStatus.choices,

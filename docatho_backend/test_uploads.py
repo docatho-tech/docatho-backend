@@ -132,6 +132,18 @@ def test_an_oversized_image_is_refused(admin_client):
     assert "5 MB" in response.data["detail"]
 
 
+def test_a_pdf_is_accepted(admin_client):
+    """A medical licence is rarely a photograph."""
+    pdf = SimpleUploadedFile(
+        "licence.pdf", b"%PDF-1.4 test", content_type="application/pdf",
+    )
+
+    response = admin_client.post(UPLOAD_URL, {"file": pdf}, format="multipart")
+
+    assert response.status_code == 201, response.data
+    assert response.data["url"].endswith(".pdf")
+
+
 def test_a_request_with_no_file_is_refused(admin_client):
     response = admin_client.post(UPLOAD_URL, {}, format="multipart")
 

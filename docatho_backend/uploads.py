@@ -21,15 +21,22 @@ from rest_framework.views import APIView
 
 from docatho_backend.masters.permissions import IsAdmin
 
-# Raster formats a browser will render inline. SVG is deliberately absent: it
-# can carry script, and these files are served from our own domain.
-ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+# Raster formats a browser will render inline, plus PDF for the verification
+# documents — a medical licence is rarely a photograph. SVG is deliberately
+# absent: it can carry script, and these files are served from our own domain.
+ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf"}
+ALLOWED_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "application/pdf",
+}
 MAX_BYTES = 5 * 1024 * 1024
 
 
 class ImageUploadView(APIView):
-    """POST an image as multipart ``file``; get back ``{"url": ...}``."""
+    """POST a file as multipart ``file``; get back ``{"url": ...}``."""
 
     permission_classes = [IsAdmin]
     parser_classes = [MultiPartParser, FormParser]
@@ -47,7 +54,7 @@ class ImageUploadView(APIView):
             return Response(
                 {
                     "detail": (
-                        "Unsupported image type. Use JPG, PNG, WebP or GIF."
+                        "Unsupported file type. Use JPG, PNG, WebP, GIF or PDF."
                     ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -55,7 +62,7 @@ class ImageUploadView(APIView):
 
         if upload.size > MAX_BYTES:
             return Response(
-                {"detail": "That image is larger than 5 MB."},
+                {"detail": "That file is larger than 5 MB."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

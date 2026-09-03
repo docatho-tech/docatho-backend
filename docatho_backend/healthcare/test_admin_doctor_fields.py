@@ -105,17 +105,25 @@ def test_the_verification_documents_are_readable(admin_client, doctor):
     assert "degree_document" in response.data
 
 
-def test_the_verification_documents_cannot_be_overwritten(admin_client, doctor):
-    """They are evidence uploaded by the doctor, not admin-editable fields."""
-    doctor.license_document = "licenses/real.pdf"
-    doctor.save()
+def test_the_verification_documents_are_writable(admin_client, doctor):
+    """Onboarding is done by an admin on the doctor's behalf.
 
-    admin_client.patch(
-        url_for(doctor), {"license_document": "licenses/forged.pdf"}, format="json",
+    Nothing ever wrote these — no endpoint accepted an upload — so a doctor was
+    approved with no licence on file at all.
+    """
+    response = admin_client.patch(
+        url_for(doctor),
+        {
+            "license_document": "https://example.com/licence.pdf",
+            "degree_document": "https://example.com/degree.pdf",
+        },
+        format="json",
     )
 
+    assert response.status_code == 200, response.data
     doctor.refresh_from_db()
-    assert doctor.license_document.name == "licenses/real.pdf"
+    assert doctor.license_document == "https://example.com/licence.pdf"
+    assert doctor.degree_document == "https://example.com/degree.pdf"
 
 
 def test_qualifications_are_listable_and_admin_writable(admin_client):
