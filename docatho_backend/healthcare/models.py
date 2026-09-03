@@ -29,6 +29,25 @@ class VerificationStatus(models.TextChoices):
     REJECTED = "rejected", "Rejected"
 
 
+class Qualification(BaseModel):
+    """A degree an admin can pick from when filing a doctor's credentials.
+
+    Only an option source. `DoctorProfile.qualifications` stays a JSON list of
+    strings, which is what both apps already read — this exists so the picker
+    has something to offer, and so a missing degree is added by an admin rather
+    than by a deploy.
+    """
+
+    name = models.CharField(max_length=120, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class ConsultationMode(models.TextChoices):
     ONLINE = "online", "Online"
     IN_CLINIC = "in_clinic", "In-Clinic"

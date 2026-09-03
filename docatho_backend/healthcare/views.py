@@ -40,6 +40,7 @@ from docatho_backend.healthcare.models import BlockedDate
 from docatho_backend.healthcare.models import DoctorAvailability
 from docatho_backend.healthcare.models import DoctorProfile
 from docatho_backend.healthcare.models import MedicalSpecialty
+from docatho_backend.healthcare.models import Qualification
 from docatho_backend.healthcare.models import MedicineReminder
 from docatho_backend.healthcare.models import SavedDoctor
 from docatho_backend.healthcare.models import SupportTicket
@@ -648,6 +649,21 @@ class SavedDoctorAPIView(APIView):
         if not deleted:
             return Response(status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class QualificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Qualification
+        fields = ("id", "name", "is_active")
+
+
+class QualificationViewSet(viewsets.ModelViewSet):
+    """Option source for the doctor form's qualifications picker."""
+
+    queryset = Qualification.objects.all()
+    serializer_class = QualificationSerializer
+    permission_classes = [ReadOnlyOrAdmin]
+    pagination_class = GenericPaginationClass
 
 
 class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
@@ -1484,7 +1500,15 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "clinic_name",
             "clinic_address",
             "clinic_city",
+            "clinic_latitude",
+            "clinic_longitude",
+            "clinic_images",
             "profile_picture",
+            # Read-only: uploaded by the doctor through the provider app. The
+            # Approve/Reject decision was being taken without them being
+            # visible on any screen.
+            "license_document",
+            "degree_document",
             "is_online",
             "auto_accept_appointments",
             "verification_status",
@@ -1493,7 +1517,32 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "review_count",
             "created_at",
         )
-        read_only_fields = ("id", "rating_avg", "review_count", "created_at")
+        read_only_fields = (
+            "id",
+            "rating_avg",
+            "review_count",
+            "created_at",
+            "license_document",
+            "degree_document",
+        )
+
+    def update(self, instance, validated_data):
+        """Keep `Provider.specialty` in step with the specialties M2M.
+
+        The apps render `provider.specialty` — a free-text CharField — on the
+        doctor card and detail header, while the browse filter matches on the
+        M2M. They are edited on different screens, so a doctor filed under
+        "Dermatologist" could display "Cardiologist" indefinitely. Deriving one
+        from the other on save leaves a single place to get it wrong.
+        """
+        doctor = super().update(instance, validated_data)
+        if "specialties" in validated_data:
+            names = list(doctor.specialties.values_list("name", flat=True))
+            label = ", ".join(names)
+            if label and doctor.provider.specialty != label:
+                doctor.provider.specialty = label[:255]
+                doctor.provider.save(update_fields=["specialty"])
+        return doctor
 
 
 class AdminDoctorDetailAPIView(RetrieveUpdateDestroyAPIView):

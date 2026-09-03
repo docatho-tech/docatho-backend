@@ -25,6 +25,11 @@ router.register(
 router.register("content", views.ContentPageViewSet, basename="content")
 router.register("specialties", views.MedicalSpecialtyViewSet, basename="specialty")
 router.register(
+    "qualifications",
+    views.QualificationViewSet,
+    basename="qualification",
+)
+router.register(
     "admin/prescriptions", views.AdminPrescriptionViewSet, basename="admin-prescription"
 )
 router.register(
