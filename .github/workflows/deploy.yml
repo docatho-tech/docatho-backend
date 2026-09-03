@@ -25,7 +25,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     steps:
       - name: SSH and run deploy script
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
