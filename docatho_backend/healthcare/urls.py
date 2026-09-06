@@ -10,6 +10,9 @@ router.register(
     "diagnostic-tests", views.DiagnosticTestViewSet, basename="diagnostic-test"
 )
 router.register(
+    "diagnostic-packages", views.DiagnosticPackageViewSet, basename="diagnostic-package"
+)
+router.register(
     "diagnostic-categories",
     views.DiagnosticTestCategoryViewSet,
     basename="diagnostic-category",

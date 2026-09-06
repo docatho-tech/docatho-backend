@@ -34,6 +34,7 @@ from docatho_backend.healthcare.models import ConsultationMode
 from docatho_backend.healthcare.models import ContentPage
 from docatho_backend.healthcare.models import DiagnosticBooking
 from docatho_backend.healthcare.models import DiagnosticBookingStatus
+from docatho_backend.healthcare.models import DiagnosticPackage
 from docatho_backend.healthcare.models import DiagnosticTest
 from docatho_backend.healthcare.models import DiagnosticTestCategory
 from docatho_backend.healthcare.models import BlockedDate
@@ -237,6 +238,10 @@ class DiagnosticTestSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(
         source="category.name", read_only=True, default=None
     )
+    provider_name = serializers.CharField(
+        source="provider.name", read_only=True, default=None
+    )
+    discount_percent = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = DiagnosticTest
@@ -245,12 +250,78 @@ class DiagnosticTestSerializer(serializers.ModelSerializer):
             "name",
             "category",
             "category_name",
+            "provider",
+            "provider_name",
             "description",
             "price",
+            "mrp",
+            "discount_percent",
             "preparation_instructions",
             "images",
             "is_active",
         )
+
+    def validate(self, attrs):
+        return _validate_list_price(attrs, self.instance)
+
+
+def _validate_list_price(attrs, instance):
+    """An MRP below the price is a discount that reads as a markup."""
+    price = attrs.get("price", getattr(instance, "price", None))
+    mrp = attrs.get("mrp", getattr(instance, "mrp", None))
+    if price is not None and mrp is not None and mrp < price:
+        raise serializers.ValidationError(
+            {"mrp": "MRP cannot be lower than the price."}
+        )
+    return attrs
+
+
+class DiagnosticPackageSerializer(serializers.ModelSerializer):
+    test_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=DiagnosticTest.objects.all(),
+        source="tests",
+        write_only=True,
+    )
+    tests = DiagnosticTestSerializer(many=True, read_only=True)
+    provider_name = serializers.CharField(
+        source="provider.name", read_only=True, default=None
+    )
+    discount_percent = serializers.IntegerField(read_only=True)
+    tests_total = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DiagnosticPackage
+        fields = (
+            "id",
+            "name",
+            "provider",
+            "provider_name",
+            "description",
+            "tests",
+            "test_ids",
+            "price",
+            "mrp",
+            "discount_percent",
+            "tests_total",
+            "preparation_instructions",
+            "images",
+            "is_active",
+        )
+
+    def get_tests_total(self, obj) -> str:
+        """What the same tests cost bought separately — the saving, priced."""
+        return str(sum((test.price for test in obj.tests.all()), Decimal("0")))
+
+    def validate_test_ids(self, tests):
+        # A pack of one is a test with a second price, and two rows that
+        # disagree about what a thing costs is the bug that follows.
+        if len(tests) < 2:
+            raise serializers.ValidationError("A package needs at least two tests.")
+        return tests
+
+    def validate(self, attrs):
+        return _validate_list_price(attrs, self.instance)
 
 
 class DiagnosticBookingSerializer(serializers.ModelSerializer):
@@ -261,6 +332,14 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
         write_only=True,
     )
     tests = DiagnosticTestSerializer(many=True, read_only=True)
+    package_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=DiagnosticPackage.objects.filter(is_active=True),
+        source="packages",
+        write_only=True,
+        required=False,
+    )
+    packages = DiagnosticPackageSerializer(many=True, read_only=True)
     patient_name = serializers.CharField(source="patient.name", read_only=True)
     patient_phone = serializers.CharField(source="patient.phone", read_only=True)
 
@@ -271,6 +350,8 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
             "center",
             "tests",
             "test_ids",
+            "packages",
+            "package_ids",
             "status",
             "scheduled_date",
             "scheduled_time",
@@ -283,14 +364,40 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "status", "total_amount", "created_at")
 
+    def validate(self, attrs):
+        # Only on create: an admin PATCHing a status sends neither list, and
+        # refusing that would make every status change a 400.
+        if self.instance is None and not attrs.get("tests") and not attrs.get("packages"):
+            raise serializers.ValidationError(
+                "Choose at least one test or package to book."
+            )
+        return attrs
+
     def create(self, validated_data):
         tests = validated_data.pop("tests", [])
+        packages = validated_data.pop("packages", [])
         validated_data["patient"] = self.context["request"].user
         booking = DiagnosticBooking.objects.create(**validated_data)
-        if tests:
-            booking.tests.set(tests)
-            booking.total_amount = sum(t.price for t in tests)
-            booking.save(update_fields=["total_amount"])
+
+        # A package is charged at its own price, not the sum of its parts —
+        # that discount is the whole point of selling one. Its tests are still
+        # written onto the booking so the lab knows what to run, and are not
+        # charged twice if the patient also picked one of them separately.
+        package_tests = [test for package in packages for test in package.tests.all()]
+        booked_tests = {test.id: test for test in [*tests, *package_tests]}
+        priced_separately = [
+            test for test in tests if test.id not in {t.id for t in package_tests}
+        ]
+
+        if packages:
+            booking.packages.set(packages)
+        if booked_tests:
+            booking.tests.set(booked_tests.values())
+
+        booking.total_amount = sum(
+            (test.price for test in priced_separately), Decimal("0")
+        ) + sum((package.price for package in packages), Decimal("0"))
+        booking.save(update_fields=["total_amount"])
         return booking
 
 
@@ -682,8 +789,10 @@ class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
 class AppointmentViewSet(viewsets.ModelViewSet):
     pagination_class = GenericPaginationClass
     # `patient` lets the admin dashboard show one patient's consultation
-    # history without a bespoke endpoint.
-    filterset_fields = ["status", "consultation_mode", "patient"]
+    # history without a bespoke endpoint; `doctor` does the same for the
+    # doctor profile page, which reports that doctor's own consultation
+    # counts and reviews.
+    filterset_fields = ["status", "consultation_mode", "patient", "doctor"]
     ordering_fields = ["scheduled_at", "created_at"]
     # SearchFilter is a default backend, but without search_fields it is a
     # no-op: `?search=` was silently ignored and returned the whole list.
@@ -873,12 +982,25 @@ class DiagnosticTestCategoryViewSet(viewsets.ModelViewSet):
 
 
 class DiagnosticTestViewSet(viewsets.ModelViewSet):
-    queryset = DiagnosticTest.objects.all().select_related("category")
+    queryset = DiagnosticTest.objects.all().select_related("category", "provider")
     serializer_class = DiagnosticTestSerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
-    filterset_fields = ["category", "is_active"]
+    filterset_fields = ["category", "is_active", "provider"]
     search_fields = ["name", "description"]
+    ordering_fields = ["name", "price", "mrp", "created_at"]
+
+    def get_queryset(self):
+        return _visible_to(super().get_queryset(), self.request)
+
+
+class DiagnosticPackageViewSet(viewsets.ModelViewSet):
+    queryset = DiagnosticPackage.objects.all().select_related("provider").prefetch_related("tests")
+    serializer_class = DiagnosticPackageSerializer
+    permission_classes = [ReadOnlyOrAdmin]
+    pagination_class = GenericPaginationClass
+    filterset_fields = ["is_active", "provider"]
+    search_fields = ["name", "description", "tests__name"]
     ordering_fields = ["name", "price", "created_at"]
 
     def get_queryset(self):
@@ -899,7 +1021,7 @@ class DiagnosticBookingViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return DiagnosticBooking.objects.filter(
             patient=self.request.user
-        ).prefetch_related("tests")
+        ).prefetch_related("tests", "packages")
 
 
 class MedicineReminderViewSet(viewsets.ModelViewSet):
@@ -1655,9 +1777,9 @@ class AdminDiagnosticBookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdmin]
     serializer_class = AdminDiagnosticBookingSerializer
     pagination_class = GenericPaginationClass
-    queryset = DiagnosticBooking.objects.prefetch_related("tests").select_related(
-        "patient", "center"
-    )
+    queryset = DiagnosticBooking.objects.prefetch_related(
+        "tests", "packages"
+    ).select_related("patient", "center")
     filterset_fields = ["status", "patient"]
     # `tests__name` spans a many-to-many, so a booking with three matching
     # tests would be returned three times; DRF's SearchFilter detects that
