@@ -265,8 +265,20 @@ class DiagnosticTest(BaseModel):
         blank=True,
         related_name="tests",
     )
+    # The lab that runs this test. Null is the shared catalogue every centre
+    # can fulfil — which is what every row was before centres could own one.
+    provider = models.ForeignKey(
+        Provider,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="diagnostic_tests",
+    )
     description = models.TextField(blank=True, default="")
+    # `price` is what the patient pays. `mrp` is the list price it is struck
+    # through against; null means there is no discount to show, not zero.
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     preparation_instructions = models.TextField(blank=True, default="")
     # A list of image URLs uploaded through /api/uploads/, same shape as
     # `DoctorProfile.clinic_images`. A test can show a sample report, the
@@ -279,6 +291,53 @@ class DiagnosticTest(BaseModel):
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def discount_percent(self) -> int:
+        return _discount_percent(self.price, self.mrp)
+
+
+def _discount_percent(price, mrp) -> int:
+    """Whole percent off the list price, or 0 when there is nothing to show."""
+    if not mrp or not price or mrp <= price:
+        return 0
+    return int(round((mrp - price) / mrp * 100))
+
+
+class DiagnosticPackage(BaseModel):
+    """Two or more tests sold together at one price.
+
+    A panel is how labs actually sell — "full body checkup, 62 tests, ₹1,499" —
+    and pricing it as the sum of its parts is not the offer. The tests stay
+    first-class: a package points at them, so a booking still records exactly
+    which tests were ordered.
+    """
+
+    name = models.CharField(max_length=255)
+    provider = models.ForeignKey(
+        Provider,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="diagnostic_packages",
+    )
+    description = models.TextField(blank=True, default="")
+    tests = models.ManyToManyField(DiagnosticTest, related_name="packages")
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    preparation_instructions = models.TextField(blank=True, default="")
+    images = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def discount_percent(self) -> int:
+        return _discount_percent(self.price, self.mrp)
 
 
 class DiagnosticBookingStatus(models.TextChoices):
@@ -303,6 +362,12 @@ class DiagnosticBooking(BaseModel):
         related_name="diagnostic_bookings",
     )
     tests = models.ManyToManyField(DiagnosticTest, related_name="bookings")
+    # Packages booked as such. Their tests are also written into `tests`, so
+    # anything reading a booking's tests keeps working; this records what was
+    # actually sold, and at which price.
+    packages = models.ManyToManyField(
+        DiagnosticPackage, related_name="bookings", blank=True
+    )
     status = models.CharField(
         max_length=20,
         choices=DiagnosticBookingStatus.choices,
