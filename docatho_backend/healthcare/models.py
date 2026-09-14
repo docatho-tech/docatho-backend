@@ -39,6 +39,15 @@ class Qualification(BaseModel):
     """
 
     name = models.CharField(max_length=120, unique=True)
+    level = models.CharField(
+        max_length=10,
+        choices=[
+            ("ug", "Undergraduate"),
+            ("pg", "Postgraduate"),
+            ("other", "Other"),
+        ],
+        default="other",
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -62,6 +71,8 @@ class DoctorProfile(BaseModel):
     )
     biography = models.TextField(blank=True, default="")
     qualifications = models.JSONField(default=list, blank=True)
+    qualifications_ug = models.JSONField(default=list, blank=True)
+    qualifications_pg = models.JSONField(default=list, blank=True)
     experience_years = models.PositiveIntegerField(default=0)
     languages = models.JSONField(default=list, blank=True)
     fee_online = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -136,6 +147,28 @@ class DoctorAvailability(BaseModel):
     class Meta:
         ordering = ["day_of_week", "start_time"]
         unique_together = [("doctor", "day_of_week", "start_time", "consultation_mode")]
+
+
+class ProviderAvailability(BaseModel):
+    """Weekly hours for a lab, diagnostic centre or home-care agency.
+
+    Doctors already have `DoctorAvailability`. Centres need the same slot
+    picker so a patient can book an MRI between 9 and 1, not "sometime today".
+    """
+
+    provider = models.ForeignKey(
+        Provider,
+        on_delete=models.CASCADE,
+        related_name="availability_slots",
+    )
+    day_of_week = models.PositiveSmallIntegerField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["day_of_week", "start_time"]
+        unique_together = [("provider", "day_of_week", "start_time")]
 
 
 class BlockedDate(BaseModel):
@@ -215,6 +248,71 @@ class Appointment(BaseModel):
         return f"Appt #{self.pk} — {self.patient} / {self.doctor}"
 
 
+class ConsultationMessageKind(models.TextChoices):
+    """
+    What a row in the consultation thread is.
+
+    A missed call is not a message with the text "missed call" — it has no
+    body, cannot be replied to, and the thread renders it as its own card.
+    Modelling it as a kind rather than a magic string keeps the client from
+    having to parse prose to decide how to draw a row.
+    """
+
+    TEXT = "text", "Text"
+    FILE = "file", "File"
+    MISSED_CALL = "missed_call", "Missed call"
+    SYSTEM = "system", "System"
+
+
+class ConsultationMessage(BaseModel):
+    """
+    One line of the doctor↔patient conversation attached to an appointment.
+
+    `sender` is the account that wrote it, so the client decides which side of
+    the thread a bubble sits on by comparing it with the appointment's patient;
+    a stored "is_from_doctor" flag would go stale the moment an admin posted on
+    a doctor's behalf.
+    """
+
+    appointment = models.ForeignKey(
+        Appointment,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="consultation_messages",
+    )
+    kind = models.CharField(
+        max_length=16,
+        choices=ConsultationMessageKind.choices,
+        default=ConsultationMessageKind.TEXT,
+    )
+    body = models.TextField(blank=True, default="")
+    # An upload URL from /api/uploads/, plus the name and size to render the
+    # attachment card without fetching the file itself.
+    attachment_url = models.CharField(max_length=500, blank=True, default="")
+    attachment_name = models.CharField(max_length=255, blank=True, default="")
+    attachment_size = models.PositiveIntegerField(null=True, blank=True)
+    # A reply quotes the row above it — the "Sorry, I was in a meeting" card
+    # that sits under the missed call it answers.
+    reply_to = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replies",
+    )
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"Msg #{self.pk} on appt {self.appointment_id}"
+
+
 class AppointmentPaymentTransaction(BaseModel):
     appointment = models.ForeignKey(
         Appointment,
@@ -285,6 +383,15 @@ class DiagnosticTest(BaseModel):
     # equipment and the collection kit, so one field would not do.
     images = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
+    test_kind = models.CharField(
+        max_length=20,
+        choices=[
+            ("lab", "Lab"),
+            ("imaging", "Imaging"),
+            ("home_care", "Home care"),
+        ],
+        default="lab",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -340,12 +447,29 @@ class DiagnosticPackage(BaseModel):
         return _discount_percent(self.price, self.mrp)
 
 
+class DiagnosticBookingKind(models.TextChoices):
+    LAB = "lab", "Lab"
+    DIAGNOSTIC = "diagnostic", "Diagnostic"
+    HOME_HEALTHCARE = "home_healthcare", "Home Healthcare"
+
+
 class DiagnosticBookingStatus(models.TextChoices):
     REQUESTED = "requested", "Requested"
     CONFIRMED = "confirmed", "Confirmed"
     SAMPLE_COLLECTED = "sample_collected", "Sample Collected"
+    REPORT_GENERATED = "report_generated", "Report Generated"
+    SLOT_ALLOTTED = "slot_allotted", "Slot Allotted"
+    PATIENT_ARRIVED = "patient_arrived", "Patient Arrived"
+    TEST_DONE = "test_done", "Test Done"
+    ASSIGNED = "assigned", "Assigned"
+    IN_PROGRESS = "in_progress", "In Progress"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
+
+
+class VisitType(models.TextChoices):
+    AT_CENTRE = "at_centre", "At Centre"
+    AT_HOME = "at_home", "At Home"
 
 
 class DiagnosticBooking(BaseModel):
@@ -368,10 +492,26 @@ class DiagnosticBooking(BaseModel):
     packages = models.ManyToManyField(
         DiagnosticPackage, related_name="bookings", blank=True
     )
+    kind = models.CharField(
+        max_length=32,
+        choices=DiagnosticBookingKind.choices,
+        default=DiagnosticBookingKind.LAB,
+        db_index=True,
+    )
     status = models.CharField(
-        max_length=20,
+        max_length=32,
         choices=DiagnosticBookingStatus.choices,
         default=DiagnosticBookingStatus.REQUESTED,
+    )
+    # Where the sample is taken. A non-empty `patient_address` used to be the
+    # only hint, which is not the same question — a centre visit can still
+    # carry an address for the report, and a home visit booked by phone can
+    # have none yet. The lists show it as its own column, so it is its own
+    # field.
+    visit_type = models.CharField(
+        max_length=16,
+        choices=VisitType.choices,
+        default=VisitType.AT_CENTRE,
     )
     scheduled_date = models.DateField(null=True, blank=True)
     scheduled_time = models.TimeField(null=True, blank=True)
@@ -430,6 +570,12 @@ class SupportTicketStatus(models.TextChoices):
     CLOSED = "closed", "Closed"
 
 
+class SupportTicketPriority(models.TextChoices):
+    LOW = "low", "Low"
+    MEDIUM = "medium", "Medium"
+    HIGH = "high", "High"
+
+
 class SupportTicket(BaseModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -442,6 +588,25 @@ class SupportTicket(BaseModel):
         max_length=20,
         choices=SupportTicketStatus.choices,
         default=SupportTicketStatus.OPEN,
+    )
+    priority = models.CharField(
+        max_length=10,
+        choices=SupportTicketPriority.choices,
+        default=SupportTicketPriority.MEDIUM,
+    )
+    # Files the reporter attached, as upload URLs from /api/uploads/ — the same
+    # convention every other document in the product uses.
+    attachments = models.JSONField(default=list, blank=True)
+    # The partner this ticket is *about*, when it is a complaint rather than a
+    # question. Distinct from `user`, who raised it: a patient complaining
+    # about a lab is one row with both set. The partner profile's "Complaints"
+    # figure counts these.
+    about_provider = models.ForeignKey(
+        "providers.Provider",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="complaints",
     )
     assigned_to = models.ForeignKey(
         settings.AUTH_USER_MODEL,

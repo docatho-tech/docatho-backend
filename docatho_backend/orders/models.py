@@ -226,7 +226,11 @@ class Order(BaseModel):
     def compute_commission(self, rate: Decimal | None = None) -> None:
         """Split the item subtotal into platform commission and provider payout."""
         if rate is None:
-            rate = self.commission_rate or _commission_percent()
+            assigned = getattr(self, "assigned_provider", None)
+            if assigned is not None and assigned.commission_percent is not None:
+                rate = assigned.commission_percent
+            else:
+                rate = self.commission_rate or _commission_percent()
         rate = Decimal(rate)
         self.commission_rate = rate.quantize(TWO_PLACES)
         self.commission_amount = (self.subtotal * rate / Decimal("100")).quantize(
@@ -411,6 +415,46 @@ class Transaction(BaseModel):
             f"Transaction<{self.pk}> order={self.order_id} "
             f"amount={self.amount} succeeded={self.succeeded}"
         )
+
+
+class PayoutStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    SETTLED = "settled", "Settled"
+    FAILED = "failed", "Failed"
+
+
+class Payout(BaseModel):
+    """
+    Money actually moved to a partner.
+
+    The Settlements view is a *live aggregate* of what a partner has earned and
+    not yet been paid; this is the ledger of transfers already initiated, which
+    an aggregate cannot reconstruct — two payouts of ₹50,000 and one of
+    ₹1,00,000 sum to the same figure as one of ₹2,00,000, and only this table
+    knows which happened. `settled_at` is null until the bank confirms.
+    """
+
+    provider = models.ForeignKey(
+        "providers.Provider",
+        on_delete=models.PROTECT,
+        related_name="payouts",
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(
+        max_length=16,
+        choices=PayoutStatus.choices,
+        default=PayoutStatus.PENDING,
+    )
+    initiated_at = models.DateTimeField(auto_now_add=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    reference = models.CharField(max_length=64, blank=True, default="")
+    note = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ("-initiated_at",)
+
+    def __str__(self) -> str:
+        return f"Payout<{self.pk}> provider={self.provider_id} amount={self.amount}"
 
 
 class OrderLog(BaseModel):

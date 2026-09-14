@@ -41,6 +41,11 @@ router.register(
     basename="admin-availability",
 )
 router.register(
+    "admin/provider-availability",
+    views.AdminProviderAvailabilityViewSet,
+    basename="admin-provider-availability",
+)
+router.register(
     "admin/blocked-dates",
     views.AdminBlockedDateViewSet,
     basename="admin-blocked-date",
@@ -79,6 +84,11 @@ urlpatterns = [
         "provider/appointments/<int:appointment_id>/video-token/",
         views.ProviderAppointmentVideoTokenAPIView.as_view(),
         name="provider-appointment-video-token",
+    ),
+    path(
+        "appointments/<int:appointment_id>/messages/",
+        views.ConsultationMessagesAPIView.as_view(),
+        name="appointment-messages",
     ),
     path(
         "admin/dashboard-stats/",

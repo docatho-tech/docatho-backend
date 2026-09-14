@@ -5,6 +5,7 @@ from django.conf import settings
 from django.db import transaction as db_transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from rest_framework import serializers
@@ -18,15 +19,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from docatho_backend.cart.models import Cart
+from docatho_backend.masters.buckets import ORDER_BUCKETS
+from docatho_backend.masters.buckets import apply_bucket
 from docatho_backend.masters.permissions import IsAdmin
 from docatho_backend.notifications.models import NotificationType
 from docatho_backend.notifications.services import notify
 from docatho_backend.orders.paginators import GenericPaginationClass
+from docatho_backend.orders.service_area import OUT_OF_SERVICE_AREA_DETAIL
+from docatho_backend.orders.service_area import is_serviceable_address
 from docatho_backend.users.views import AddressSerializer
 
 from .invoices import get_or_create_invoice
 from .models import Order
 from .models import OrderItem
+from .models import Payout
+from .models import PayoutStatus
 from .models import Prescription
 from .models import Transaction
 from .razorpay import RazorpayClient
@@ -100,6 +107,40 @@ class OrderSerializer(serializers.ModelSerializer):
 class AdminOrderSerializer(OrderSerializer):
     """Adds fulfilment/money fields visible only to staff & providers."""
 
+    # The fulfilling pharmacy, named rather than referenced by id: every admin
+    # queue row shows who is packing the order, and a bare provider id meant
+    # the dashboard fetched the partner list to translate each one.
+    pharmacy_name = serializers.CharField(
+        source="assigned_provider.name",
+        read_only=True,
+        default="",
+    )
+    pharmacy_logo = serializers.CharField(
+        source="assigned_provider.logo_url",
+        read_only=True,
+        default="",
+    )
+    pharmacy_city = serializers.CharField(
+        source="assigned_provider.city",
+        read_only=True,
+        default="",
+    )
+    pharmacy_location = serializers.CharField(
+        source="assigned_provider.location",
+        read_only=True,
+        default="",
+    )
+    item_count = serializers.SerializerMethodField()
+    patient_name = serializers.CharField(source="user.name", read_only=True, default="")
+    patient_phone = serializers.CharField(
+        source="user.phone",
+        read_only=True,
+        default="",
+    )
+
+    def get_item_count(self, obj):
+        return obj.items.count()
+
     class Meta(OrderSerializer.Meta):
         fields = OrderSerializer.Meta.fields + (
             "delivered_at",
@@ -107,6 +148,13 @@ class AdminOrderSerializer(OrderSerializer):
             "commission_amount",
             "provider_earning",
             "stock_reserved",
+            "pharmacy_name",
+            "pharmacy_logo",
+            "pharmacy_city",
+            "pharmacy_location",
+            "item_count",
+            "patient_name",
+            "patient_phone",
         )
 
 
@@ -142,6 +190,42 @@ class TransactionSerializer(serializers.ModelSerializer):
     order_id = serializers.IntegerField(source="order.id", read_only=True)
     user_name = serializers.CharField(source="order.user.name", read_only=True)
     user_phone = serializers.CharField(source="order.user.phone", read_only=True)
+    # The partner the money is split with, and the split itself. Both live on
+    # the order; a transactions table without them can show what was charged
+    # but not what anyone is owed, which is the question it is read to answer.
+    partner_name = serializers.CharField(
+        source="order.assigned_provider.name",
+        read_only=True,
+        default="",
+    )
+    partner_logo = serializers.CharField(
+        source="order.assigned_provider.logo_url",
+        read_only=True,
+        default="",
+    )
+    partner_city = serializers.CharField(
+        source="order.assigned_provider.city",
+        read_only=True,
+        default="",
+    )
+    commission_rate = serializers.DecimalField(
+        source="order.commission_rate",
+        max_digits=5,
+        decimal_places=2,
+        read_only=True,
+    )
+    commission_amount = serializers.DecimalField(
+        source="order.commission_amount",
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    provider_earning = serializers.DecimalField(
+        source="order.provider_earning",
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
 
     class Meta:
         model = Transaction
@@ -151,6 +235,12 @@ class TransactionSerializer(serializers.ModelSerializer):
             "order_number",
             "user_name",
             "user_phone",
+            "partner_name",
+            "partner_logo",
+            "partner_city",
+            "commission_rate",
+            "commission_amount",
+            "provider_earning",
             "provider",
             "payment_method",
             "transaction_order_id",
@@ -307,6 +397,26 @@ class OrderViewSet(viewsets.ViewSet):
                     {"detail": "Invalid address."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
+        # A medicine order is a delivery. Without an address there is nothing
+        # to deliver it to, and the order reaches the fulfilment queue with an
+        # empty address block — so refuse it here rather than accept an order
+        # nobody can act on. `address_id` stayed optional in the serializer for
+        # the users who do have a default address on their profile.
+        if address is None:
+            return Response(
+                {"detail": "A delivery address is required to place an order."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not is_serviceable_address(address):
+            return Response(
+                {
+                    "detail": OUT_OF_SERVICE_AREA_DETAIL,
+                    "out_of_service_area": True,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         with db_transaction.atomic():
             order = Order.objects.create(
@@ -482,19 +592,47 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
     permission_classes = (IsAdmin,)
     pagination_class = GenericPaginationClass
     serializer_class = AdminOrderSerializer
-    filter_backends = (DjangoFilterBackend, filters.SearchFilter)
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
     filterset_fields = [
         "status",
         "payment_status",
         "payment_method",
         "assigned_provider",
+        "assigned_provider__city",
         # Lets the dashboard's patient drawer list that patient's orders
         # without a dedicated endpoint.
         "user",
     ]
-    search_fields = ["order_number", "user__name", "user__phone"]
-    ordering_fields = ["order_number", "total", "status", "placed_at"]
-    queryset = Order.objects.all().order_by("-placed_at")
+    search_fields = [
+        "order_number",
+        "user__name",
+        "user__phone",
+        "assigned_provider__name",
+        "assigned_provider__city",
+    ]
+    ordering_fields = [
+        "order_number",
+        "total",
+        "status",
+        "placed_at",
+        "user__name",
+        "assigned_provider__name",
+        "assigned_provider__city",
+        "assigned_provider__location",
+    ]
+    queryset = (
+        Order.objects.select_related("user", "assigned_provider")
+        .prefetch_related("items")
+        .order_by("-placed_at")
+    )
+
+    def get_queryset(self):
+        # The queue's tab strip groups statuses; see `masters/buckets.py`.
+        return apply_bucket(
+            super().get_queryset(),
+            self.request.query_params.get("bucket"),
+            ORDER_BUCKETS,
+        )
 
     @action(detail=True, methods=["patch"], url_path="update-status")
     def update_status(self, request, pk=None):
@@ -571,17 +709,84 @@ class TransactionListView(viewsets.ReadOnlyModelViewSet):
     permission_classes = (IsAuthenticated,)
     pagination_class = GenericPaginationClass
     serializer_class = TransactionSerializer
-    filter_backends = (DjangoFilterBackend, filters.SearchFilter)
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
     filterset_fields = ["succeeded", "provider", "payment_method"]
     search_fields = [
         "razorpay_payment_id",
         "transaction_order_id",
         "order__order_number",
+        "order__user__name",
+        "order__assigned_provider__name",
     ]
-    queryset = Transaction.objects.all().order_by("-paid_at", "-created_at")
+    ordering_fields = ["paid_at", "amount", "created_at"]
+    queryset = (
+        Transaction.objects.select_related(
+            "order__user",
+            "order__assigned_provider",
+        )
+        .all()
+        .order_by("-paid_at", "-created_at")
+    )
 
     def get_queryset(self):
         queryset = super().get_queryset()
         if not self.request.user.is_staff:
             queryset = queryset.filter(order__user=self.request.user)
         return queryset
+
+
+class AdminPayoutSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source="provider.name", read_only=True)
+    partner_city = serializers.CharField(source="provider.city", read_only=True)
+    partner_logo = serializers.CharField(source="provider.logo_url", read_only=True)
+
+    class Meta:
+        model = Payout
+        fields = (
+            "id",
+            "provider",
+            "partner_name",
+            "partner_city",
+            "partner_logo",
+            "amount",
+            "status",
+            "initiated_at",
+            "settled_at",
+            "reference",
+            "note",
+        )
+        read_only_fields = ("id", "initiated_at", "partner_name", "partner_city", "partner_logo")
+
+    def validate_amount(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("A payout must be for more than zero.")
+        return value
+
+    def validate(self, attrs):
+        """
+        Keep `settled_at` and `status` telling the same story.
+
+        A row marked Settled with no date, or dated but still Pending, is the
+        kind of half-written record a finance export then reports twice.
+        """
+        instance = self.instance
+        new_status = attrs.get("status", getattr(instance, "status", None))
+        settled_at = attrs.get("settled_at", getattr(instance, "settled_at", None))
+        if new_status == PayoutStatus.SETTLED and settled_at is None:
+            attrs["settled_at"] = timezone.now()
+        if new_status != PayoutStatus.SETTLED:
+            attrs["settled_at"] = None
+        return attrs
+
+
+class AdminPayoutViewSet(viewsets.ModelViewSet):
+    """Admin: the ledger of transfers behind the Payout History tab."""
+
+    permission_classes = (IsAdmin,)
+    pagination_class = GenericPaginationClass
+    serializer_class = AdminPayoutSerializer
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
+    filterset_fields = ["status", "provider", "provider__provider_type"]
+    search_fields = ["reference", "provider__name", "provider__city"]
+    ordering_fields = ["initiated_at", "settled_at", "amount", "status"]
+    queryset = Payout.objects.select_related("provider").order_by("-initiated_at")

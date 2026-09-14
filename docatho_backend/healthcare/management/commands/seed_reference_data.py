@@ -35,11 +35,43 @@ DIAGNOSTIC_CATEGORIES = [
     "Urine & Stool",
 ]
 
+#: Degrees, with the level each one belongs to.
+#:
+#: The level is not decoration: the doctor form has separate undergraduate and
+#: postgraduate pickers, and seeding every degree as "other" left both of them
+#: permanently empty — a picker that could never gain an option, which is the
+#: dead end the catalogue managers exist to prevent.
 QUALIFICATIONS = [
-    "MBBS", "MD", "MS", "DM", "MCh", "DNB", "DGO", "DCH", "DO", "DLO",
-    "DPM", "DA", "DVD", "MDS", "BDS", "BAMS", "BHMS", "BUMS", "BPT", "MPT",
-    "BSc Nursing", "MSc Nursing", "PhD", "FRCS", "MRCP", "FRCP", "FICS",
-    "FACS", "Diploma in Diabetology", "Fellowship in Cardiology",
+    ("MBBS", "ug"),
+    ("BDS", "ug"),
+    ("BAMS", "ug"),
+    ("BHMS", "ug"),
+    ("BUMS", "ug"),
+    ("BPT", "ug"),
+    ("BSc Nursing", "ug"),
+    ("MD", "pg"),
+    ("MS", "pg"),
+    ("DM", "pg"),
+    ("MCh", "pg"),
+    ("DNB", "pg"),
+    ("DGO", "pg"),
+    ("DCH", "pg"),
+    ("DO", "pg"),
+    ("DLO", "pg"),
+    ("DPM", "pg"),
+    ("DA", "pg"),
+    ("DVD", "pg"),
+    ("MDS", "pg"),
+    ("MPT", "pg"),
+    ("MSc Nursing", "pg"),
+    ("PhD", "pg"),
+    ("FRCS", "other"),
+    ("MRCP", "other"),
+    ("FRCP", "other"),
+    ("FICS", "other"),
+    ("FACS", "other"),
+    ("Diploma in Diabetology", "other"),
+    ("Fellowship in Cardiology", "other"),
 ]
 
 
@@ -54,8 +86,15 @@ class Command(BaseCommand):
             (Qualification, QUALIFICATIONS, "qualifications"),
         ):
             created = 0
-            for name in names:
-                _, was_created = model.objects.get_or_create(name=name)
+            for entry in names:
+                name, level = entry if isinstance(entry, tuple) else (entry, None)
+                obj, was_created = model.objects.get_or_create(name=name)
+                # Backfill on re-run: an install seeded before levels existed
+                # has every degree at "other", and both pickers stay empty
+                # until something corrects them.
+                if level and getattr(obj, "level", None) in (None, "", "other"):
+                    obj.level = level
+                    obj.save(update_fields=["level"])
                 created += int(was_created)
             total = model.objects.count()
             self.stdout.write(

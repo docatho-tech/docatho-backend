@@ -24,6 +24,7 @@ from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.orders.views import AdminOrderSerializer
 from docatho_backend.orders.views import UpdateOrderStatusSerializer
 from docatho_backend.orders.views import _notify_status_change
+from docatho_backend.providers.models import OnboardingStatus
 from docatho_backend.providers.models import Provider
 from docatho_backend.providers.serializers import AdminProviderCreateSerializer
 from docatho_backend.providers.serializers import AdminProviderSerializer
@@ -63,10 +64,51 @@ class AdminProviderListCreateAPIView(ListCreateAPIView):
     # OrderingFilter is a project-wide default backend; naming the list here
     # dropped it, so `?ordering=` was silently ignored on this endpoint.
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["provider_type"]
-    search_fields = ["name", "specialty", "user__name", "user__phone"]
-    ordering_fields = ["name", "provider_type", "created_at"]
-    queryset = Provider.objects.select_related("user").all().order_by("-created_at")
+    filterset_fields = ["provider_type", "onboarding_status", "city", "is_online"]
+    search_fields = [
+        "name",
+        "specialty",
+        "city",
+        "location",
+        "poc_name",
+        "user__name",
+        "user__phone",
+    ]
+    # Every key here is a sortable header in the dashboard. A `sortKey` the
+    # viewset does not list is ignored silently by DRF, so the two lists have
+    # to be kept in step.
+    ordering_fields = [
+        "name",
+        "provider_type",
+        "city",
+        "location",
+        "rating_avg",
+        "review_count",
+        "commission_percent",
+        "onboarding_status",
+        "invited_at",
+        "created_at",
+    ]
+    queryset = (
+        Provider.objects.select_related("user")
+        .annotate(complaint_total=Count("complaints"))
+        .order_by("-created_at")
+    )
+
+    def get_queryset(self):
+        """
+        `?pipeline=1` narrows to partners that are *not yet live*.
+
+        The onboarding screen needs "anything still being onboarded", which is
+        four statuses rather than one, and a filterset field can only match a
+        single value. Filtering it in the client instead was worse: the header
+        count came from the API and the rows came from the filter, so a page
+        of six approved doctors rendered as "Doctors 6" above an empty table.
+        """
+        queryset = super().get_queryset()
+        if self.request.query_params.get("pipeline") in ("1", "true", "True"):
+            return queryset.exclude(onboarding_status=OnboardingStatus.APPROVED)
+        return queryset
 
     def get_serializer_class(self):
         if self.request.method == "POST":

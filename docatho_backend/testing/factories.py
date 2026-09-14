@@ -49,11 +49,14 @@ class ProviderFactory(DjangoModelFactory):
 
 
 class AddressFactory(DjangoModelFactory):
+    # Raipur by default: it is the only city orders can be delivered to, so a
+    # Mumbai fixture made every checkout test exercise an address the product
+    # now refuses. Tests that want an out-of-area address should say so.
     user = factory.SubFactory(UserFactory)
     address_line1 = factory.Faker("street_address")
-    city = "Mumbai"
-    state = "Maharashtra"
-    postal_code = "400001"
+    city = "Raipur"
+    state = "Chhattisgarh"
+    postal_code = "492001"
     country = "India"
 
     class Meta:
