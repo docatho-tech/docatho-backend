@@ -5,7 +5,9 @@ from enum import Enum
 class ProviderType(Enum):
     DOCTOR = "Doctor"
     DIAGNOSTIC_CENTER = "Diagnostic Center"
+    LAB = "Lab"
     CHEMIST = "Chemist"
+    HOME_HEALTHCARE = "Home Healthcare"
     HOSPITAL = "Hospital"
     NURSE = "Nurse"
     PHYSIOTHERAPIST = "Physiotherapist"

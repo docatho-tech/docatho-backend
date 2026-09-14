@@ -5,11 +5,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.db.models import Count
-from django.db.models import Sum
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
+from rest_framework import permissions
 from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
@@ -30,9 +31,17 @@ from docatho_backend.healthcare.models import AIChatSession
 from docatho_backend.healthcare.models import Appointment
 from docatho_backend.healthcare.models import AppointmentPaymentStatus
 from docatho_backend.healthcare.models import AppointmentStatus
+from docatho_backend.healthcare.models import ConsultationMessage
+from docatho_backend.healthcare.models import ConsultationMessageKind
 from docatho_backend.healthcare.models import ConsultationMode
 from docatho_backend.healthcare.models import ContentPage
+from docatho_backend.healthcare.dashboard_stats import build_dashboard_stats
+from docatho_backend.masters.buckets import APPOINTMENT_BUCKETS
+from docatho_backend.masters.buckets import BOOKING_BUCKETS
+from docatho_backend.masters.buckets import TICKET_BUCKETS
+from docatho_backend.masters.buckets import apply_bucket
 from docatho_backend.healthcare.models import DiagnosticBooking
+from docatho_backend.healthcare.models import DiagnosticBookingKind
 from docatho_backend.healthcare.models import DiagnosticBookingStatus
 from docatho_backend.healthcare.models import DiagnosticPackage
 from docatho_backend.healthcare.models import DiagnosticTest
@@ -40,6 +49,7 @@ from docatho_backend.healthcare.models import DiagnosticTestCategory
 from docatho_backend.healthcare.models import BlockedDate
 from docatho_backend.healthcare.models import DoctorAvailability
 from docatho_backend.healthcare.models import DoctorProfile
+from docatho_backend.healthcare.models import ProviderAvailability
 from docatho_backend.healthcare.models import MedicalSpecialty
 from docatho_backend.healthcare.models import Qualification
 from docatho_backend.healthcare.models import MedicineReminder
@@ -52,11 +62,11 @@ from docatho_backend.masters.permissions import IsCustomer
 from docatho_backend.masters.permissions import IsProvider
 from docatho_backend.masters.permissions import ReadOnlyOrAdmin
 from docatho_backend.masters.permissions import is_provider
-from docatho_backend.orders.models import Order
 from docatho_backend.orders.models import Prescription
 from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.notifications.models import NotificationType
 from docatho_backend.notifications.services import notify
+from docatho_backend.providers.enums import ProviderType
 from docatho_backend.providers.models import Provider
 from docatho_backend.users.models import User
 
@@ -83,6 +93,8 @@ class DoctorListSerializer(serializers.ModelSerializer):
             "specialties",
             "biography",
             "qualifications",
+            "qualifications_ug",
+            "qualifications_pg",
             "experience_years",
             "languages",
             "fee_online",
@@ -186,9 +198,60 @@ class AdminAppointmentSerializer(AppointmentSerializer):
     `status` is unlocked so support can confirm, complete or reject on a
     patient's behalf; the patient-facing serializer keeps it read-only so a
     customer cannot mark their own consultation completed.
+
+    The extra read-only fields are what the admin queue's columns are: the
+    city a consultation belongs to, who to ring, and the doctor's specialty.
+    They are on the staff serializer only — a patient listing their own
+    appointments has no business receiving the doctor's contact details.
     """
 
+    patient_id = serializers.IntegerField(source="patient.id", read_only=True)
+    patient_phone = serializers.CharField(source="patient.phone", read_only=True)
+    doctor_specialty = serializers.CharField(
+        source="doctor.provider.specialty",
+        read_only=True,
+    )
+    doctor_picture = serializers.CharField(
+        source="doctor.profile_picture",
+        read_only=True,
+    )
+    doctor_phone = serializers.CharField(
+        source="doctor.provider.user.phone",
+        read_only=True,
+    )
+    city = serializers.CharField(source="doctor.clinic_city", read_only=True)
+    prescription_url = serializers.SerializerMethodField()
+    message_count = serializers.SerializerMethodField()
+
+    def get_prescription_url(self, obj):
+        """
+        The patient's most recent prescription document.
+
+        `Prescription` is not linked to an appointment — it is uploaded at
+        pharmacy checkout — so this is the latest one on file rather than a
+        claim that it came out of this consultation.
+        """
+        prescription = obj.patient.prescriptions.order_by("-created_at").first()
+        if prescription is None or not prescription.image:
+            return ""
+        request = self.context.get("request")
+        url = prescription.image.url
+        return request.build_absolute_uri(url) if request else url
+
+    def get_message_count(self, obj):
+        return obj.messages.count()
+
     class Meta(AppointmentSerializer.Meta):
+        fields = AppointmentSerializer.Meta.fields + (
+            "patient_id",
+            "patient_phone",
+            "doctor_specialty",
+            "doctor_picture",
+            "doctor_phone",
+            "city",
+            "prescription_url",
+            "message_count",
+        )
         read_only_fields = tuple(
             field
             for field in AppointmentSerializer.Meta.read_only_fields
@@ -259,6 +322,7 @@ class DiagnosticTestSerializer(serializers.ModelSerializer):
             "preparation_instructions",
             "images",
             "is_active",
+            "test_kind",
         )
 
     def validate(self, attrs):
@@ -342,16 +406,35 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
     packages = DiagnosticPackageSerializer(many=True, read_only=True)
     patient_name = serializers.CharField(source="patient.name", read_only=True)
     patient_phone = serializers.CharField(source="patient.phone", read_only=True)
+    center_name = serializers.CharField(source="center.name", read_only=True, default="")
+    center_logo = serializers.CharField(
+        source="center.logo_url",
+        read_only=True,
+        default="",
+    )
+    # The centre's city, not the patient's: the queues are worked per city and
+    # the row names the lab the sample goes to.
+    city = serializers.CharField(source="center.city", read_only=True, default="")
+    test_count = serializers.SerializerMethodField()
+
+    def get_test_count(self, obj):
+        return obj.tests.count()
 
     class Meta:
         model = DiagnosticBooking
         fields = (
             "id",
             "center",
+            "center_name",
+            "center_logo",
+            "city",
             "tests",
             "test_ids",
+            "test_count",
             "packages",
             "package_ids",
+            "kind",
+            "visit_type",
             "status",
             "scheduled_date",
             "scheduled_time",
@@ -377,6 +460,9 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
         tests = validated_data.pop("tests", [])
         packages = validated_data.pop("packages", [])
         validated_data["patient"] = self.context["request"].user
+        center = validated_data.get("center")
+        if center is not None:
+            validated_data["kind"] = _booking_kind_for_provider(center)
         booking = DiagnosticBooking.objects.create(**validated_data)
 
         # A package is charged at its own price, not the sum of its parts —
@@ -442,10 +528,43 @@ class WishlistSerializer(serializers.ModelSerializer):
 
 
 class SupportTicketSerializer(serializers.ModelSerializer):
+    """
+    A ticket as the reporter sees it.
+
+    ``priority`` is read-only here on purpose: it is triage, and a reporter
+    who could set their own would set every ticket to High. The admin
+    viewset swaps in a serializer that can write it.
+    """
+
+    reporter_name = serializers.CharField(source="user.name", read_only=True)
+    reporter_phone = serializers.CharField(source="user.phone", read_only=True)
+
     class Meta:
         model = SupportTicket
-        fields = ("id", "subject", "description", "status", "assigned_to", "created_at")
-        read_only_fields = ("id", "status", "assigned_to", "created_at")
+        fields = (
+            "id",
+            "subject",
+            "description",
+            "status",
+            "priority",
+            "attachments",
+            "about_provider",
+            "assigned_to",
+            "reporter_name",
+            "reporter_phone",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "status",
+            "priority",
+            "assigned_to",
+            "reporter_name",
+            "reporter_phone",
+            "created_at",
+            "updated_at",
+        )
 
     def create(self, validated_data):
         validated_data["user"] = self.context["request"].user
@@ -502,6 +621,15 @@ class AdminDoctorSerializer(serializers.ModelSerializer):
     provider_id = serializers.IntegerField(source="provider.id", read_only=True)
     name = serializers.CharField(source="provider.name", read_only=True)
     phone = serializers.CharField(source="provider.user.phone", read_only=True)
+    email = serializers.CharField(source="provider.user.email", read_only=True)
+    specialty = serializers.CharField(source="provider.specialty", read_only=True)
+    last_active_at = serializers.DateTimeField(
+        source="provider.user.last_active_at",
+        read_only=True,
+    )
+    # Annotated by the list view. Counting per row in the serializer would be
+    # one query per doctor, which is what the annotation exists to avoid.
+    consultation_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = DoctorProfile
@@ -510,12 +638,19 @@ class AdminDoctorSerializer(serializers.ModelSerializer):
             "provider_id",
             "name",
             "phone",
+            "email",
+            "specialty",
+            "profile_picture",
             "verification_status",
             "is_verified",
+            "is_online",
             "experience_years",
+            "clinic_name",
             "clinic_city",
             "rating_avg",
             "review_count",
+            "consultation_count",
+            "last_active_at",
             "created_at",
         )
 
@@ -523,6 +658,27 @@ class AdminDoctorSerializer(serializers.ModelSerializer):
 class AdminPatientSerializer(serializers.ModelSerializer):
     appointment_count = serializers.IntegerField(read_only=True)
     order_count = serializers.IntegerField(read_only=True)
+    city = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
+
+    def get_city(self, obj):
+        address = obj.address
+        return address.city if address else ""
+
+    def get_address(self, obj):
+        """The default address as one line, the way every profile prints it."""
+        address = obj.address
+        if not address:
+            return ""
+        parts = [
+            address.address_line1,
+            address.address_line2,
+            address.landmark,
+            address.city,
+            address.state,
+            address.postal_code,
+        ]
+        return ", ".join(str(part) for part in parts if part)
 
     class Meta:
         model = User
@@ -533,6 +689,11 @@ class AdminPatientSerializer(serializers.ModelSerializer):
             "email",
             "dob",
             "is_active",
+            "device",
+            "source",
+            "last_active_at",
+            "city",
+            "address",
             "appointment_count",
             "order_count",
             "date_joined",
@@ -617,6 +778,16 @@ def _notify_appointment_status_change(appointment, new_status):
     )
 
 
+def _booking_kind_for_provider(center) -> str:
+    """Lab / imaging / home-care bookings follow the centre's provider type."""
+    mapping = {
+        ProviderType.LAB.value: DiagnosticBookingKind.LAB,
+        ProviderType.DIAGNOSTIC_CENTER.value: DiagnosticBookingKind.DIAGNOSTIC,
+        ProviderType.HOME_HEALTHCARE.value: DiagnosticBookingKind.HOME_HEALTHCARE,
+    }
+    return mapping.get(getattr(center, "provider_type", ""), DiagnosticBookingKind.LAB)
+
+
 def _notify_diagnostic_booking_requested(booking):
     notify(
         booking.patient,
@@ -634,10 +805,40 @@ def _notify_diagnostic_booking_status_change(booking, new_status):
             "Booking confirmed",
             "Your diagnostic test booking has been confirmed.",
         ),
+        DiagnosticBookingStatus.SLOT_ALLOTTED: (
+            NotificationType.DIAG_BOOKING_CONFIRMED,
+            "Slot allotted",
+            "A slot has been allotted for your diagnostic test.",
+        ),
+        DiagnosticBookingStatus.ASSIGNED: (
+            NotificationType.DIAG_BOOKING_CONFIRMED,
+            "Visit assigned",
+            "A clinician has been assigned for your home healthcare visit.",
+        ),
         DiagnosticBookingStatus.SAMPLE_COLLECTED: (
             NotificationType.DIAG_SAMPLE_COLLECTED,
             "Sample collected",
             "Your diagnostic test sample has been collected.",
+        ),
+        DiagnosticBookingStatus.PATIENT_ARRIVED: (
+            NotificationType.DIAG_SAMPLE_COLLECTED,
+            "Checked in",
+            "You have been checked in for your diagnostic test.",
+        ),
+        DiagnosticBookingStatus.IN_PROGRESS: (
+            NotificationType.DIAG_SAMPLE_COLLECTED,
+            "Visit in progress",
+            "Your home healthcare visit is in progress.",
+        ),
+        DiagnosticBookingStatus.TEST_DONE: (
+            NotificationType.DIAG_SAMPLE_COLLECTED,
+            "Test done",
+            "Your diagnostic test has been completed. The report will follow.",
+        ),
+        DiagnosticBookingStatus.REPORT_GENERATED: (
+            NotificationType.DIAG_BOOKING_COMPLETED,
+            "Report ready",
+            "Your diagnostic test report is ready.",
         ),
         DiagnosticBookingStatus.COMPLETED: (
             NotificationType.DIAG_BOOKING_COMPLETED,
@@ -761,7 +962,7 @@ class SavedDoctorAPIView(APIView):
 class QualificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Qualification
-        fields = ("id", "name", "is_active")
+        fields = ("id", "name", "level", "is_active")
 
 
 class QualificationViewSet(viewsets.ModelViewSet):
@@ -771,6 +972,7 @@ class QualificationViewSet(viewsets.ModelViewSet):
     serializer_class = QualificationSerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
+    filterset_fields = ["is_active", "level"]
 
 
 class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
@@ -793,13 +995,23 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     # doctor profile page, which reports that doctor's own consultation
     # counts and reviews.
     filterset_fields = ["status", "consultation_mode", "patient", "doctor"]
-    ordering_fields = ["scheduled_at", "created_at"]
+    ordering_fields = [
+        "id",
+        "scheduled_at",
+        "created_at",
+        "status",
+        "consultation_mode",
+        "patient__name",
+        "doctor__provider__name",
+        "doctor__clinic_city",
+    ]
     # SearchFilter is a default backend, but without search_fields it is a
     # no-op: `?search=` was silently ignored and returned the whole list.
     search_fields = [
         "patient__name",
         "patient__phone",
         "doctor__provider__name",
+        "doctor__clinic_city",
     ]
 
     def perform_create(self, serializer):
@@ -826,9 +1038,19 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return [IsCustomer()]
 
     def get_queryset(self):
-        qs = Appointment.objects.select_related("patient", "doctor__provider")
+        qs = Appointment.objects.select_related(
+            "patient",
+            "doctor__provider__user",
+        )
+        # The queue's tab strip is a group of statuses, not one status. See
+        # `masters/buckets.py` for why this cannot be a `filterset_field`.
+        qs = apply_bucket(
+            qs,
+            self.request.query_params.get("bucket"),
+            APPOINTMENT_BUCKETS,
+        )
         if self.request.user.is_staff:
-            return qs.all()
+            return qs
         return qs.filter(patient=self.request.user)
 
     def get_serializer_class(self):
@@ -986,7 +1208,7 @@ class DiagnosticTestViewSet(viewsets.ModelViewSet):
     serializer_class = DiagnosticTestSerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
-    filterset_fields = ["category", "is_active", "provider"]
+    filterset_fields = ["category", "is_active", "provider", "test_kind"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "price", "mrp", "created_at"]
 
@@ -1011,7 +1233,7 @@ class DiagnosticBookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCustomer]
     serializer_class = DiagnosticBookingSerializer
     pagination_class = GenericPaginationClass
-    filterset_fields = ["status"]
+    filterset_fields = ["status", "kind"]
     ordering_fields = ["created_at", "scheduled_date"]
 
     def perform_create(self, serializer):
@@ -1047,26 +1269,61 @@ class WishlistViewSet(viewsets.ModelViewSet):
         )
 
 
+class AdminSupportTicketSerializer(SupportTicketSerializer):
+    """
+    Triage fields the reporter is not allowed to set.
+
+    Priority and assignment are decisions the support desk makes; leaving them
+    read-only for everyone meant the dashboard's Priority select wrote nothing
+    and silently reverted on the next fetch.
+    """
+
+    class Meta(SupportTicketSerializer.Meta):
+        read_only_fields = (
+            "id",
+            "reporter_name",
+            "reporter_phone",
+            "created_at",
+            "updated_at",
+        )
+
+
 class SupportTicketViewSet(viewsets.ModelViewSet):
     serializer_class = SupportTicketSerializer
     pagination_class = GenericPaginationClass
-    filterset_fields = ["status"]
+    filterset_fields = ["status", "priority", "about_provider"]
     # Admins triage by subject or by who raised the ticket; customers only
     # ever search their own queryset, so the reporter fields are safe here.
     search_fields = ["subject", "description", "user__name", "user__phone"]
-    ordering_fields = ["created_at", "status"]
+    ordering_fields = ["created_at", "status", "priority", "id"]
+
+    def get_serializer_class(self):
+        if self.request.user.is_authenticated and self.request.user.is_staff:
+            return AdminSupportTicketSerializer
+        return SupportTicketSerializer
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve") and self.request.user.is_staff:
+        # Staff raise tickets too — the dashboard's "Raise a ticket" button.
+        # Without this, `create` fell through to IsCustomer and an admin got a
+        # 403 from the one screen that offers the action.
+        if self.request.user.is_staff:
             return [IsAdmin()]
         if self.action in ("create", "list", "retrieve"):
             return [IsCustomer()]
         return [IsAdmin()]
 
     def get_queryset(self):
-        if self.request.user.is_staff:
-            return SupportTicket.objects.select_related("user").all()
-        return SupportTicket.objects.filter(user=self.request.user)
+        queryset = (
+            SupportTicket.objects.select_related("user", "about_provider").all()
+            if self.request.user.is_staff
+            else SupportTicket.objects.filter(user=self.request.user)
+        )
+        # "In Progress" is open *and* in progress; see `masters/buckets.py`.
+        return apply_bucket(
+            queryset,
+            self.request.query_params.get("bucket"),
+            TICKET_BUCKETS,
+        )
 
 
 class ContentPageViewSet(viewsets.ModelViewSet):
@@ -1272,52 +1529,96 @@ class ProviderAppointmentVideoTokenAPIView(APIView):
         return Response(payload)
 
 
+class ConsultationMessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.CharField(source="sender.name", read_only=True)
+    # Which side of the thread the bubble sits on. Derived rather than stored:
+    # an admin posting on a doctor's behalf must still render as the doctor.
+    is_from_patient = serializers.SerializerMethodField()
+
+    def get_is_from_patient(self, obj):
+        return obj.sender_id == obj.appointment.patient_id
+
+    class Meta:
+        model = ConsultationMessage
+        fields = (
+            "id",
+            "kind",
+            "body",
+            "attachment_url",
+            "attachment_name",
+            "attachment_size",
+            "reply_to",
+            "sender",
+            "sender_name",
+            "is_from_patient",
+            "read_at",
+            "created_at",
+        )
+        read_only_fields = ("id", "sender", "sender_name", "is_from_patient", "created_at")
+
+    def validate(self, attrs):
+        kind = attrs.get("kind", ConsultationMessageKind.TEXT)
+        body = (attrs.get("body") or "").strip()
+        attachment = (attrs.get("attachment_url") or "").strip()
+        # An empty text message is a blank bubble nobody can read; a file
+        # message with no file is a download button that 404s.
+        if kind == ConsultationMessageKind.TEXT and not body:
+            raise serializers.ValidationError({"body": "Message cannot be empty."})
+        if kind == ConsultationMessageKind.FILE and not attachment:
+            raise serializers.ValidationError(
+                {"attachment_url": "Attach a file or send this as a text message."},
+            )
+        return attrs
+
+
+class ConsultationMessagesAPIView(APIView):
+    """
+    GET/POST the conversation attached to one appointment.
+
+    Three roles can reach it and each sees only their own consultations: the
+    patient it belongs to, the doctor taking it, and staff. Anyone else gets a
+    404 rather than a 403, so the endpoint does not confirm that an
+    appointment id exists to someone with no business knowing.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _appointment_for(self, request, appointment_id: int) -> Appointment:
+        appointment = get_object_or_404(
+            Appointment.objects.select_related("patient", "doctor__provider__user"),
+            pk=appointment_id,
+        )
+        user = request.user
+        if user.is_staff:
+            return appointment
+        if appointment.patient_id == user.id:
+            return appointment
+        doctor_user_id = getattr(appointment.doctor.provider, "user_id", None)
+        if doctor_user_id == user.id:
+            return appointment
+        raise Http404
+
+    def get(self, request, appointment_id: int):
+        appointment = self._appointment_for(request, appointment_id)
+        messages = appointment.messages.select_related("sender").all()
+        return Response(ConsultationMessageSerializer(messages, many=True).data)
+
+    def post(self, request, appointment_id: int):
+        appointment = self._appointment_for(request, appointment_id)
+        serializer = ConsultationMessageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message = serializer.save(appointment=appointment, sender=request.user)
+        return Response(
+            ConsultationMessageSerializer(message).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class AdminDashboardStatsAPIView(APIView):
     permission_classes = [IsAdmin]
 
     def get(self, request):
-        today = timezone.localdate()
-        patients = User.objects.filter(is_staff=False).exclude(provider__isnull=False)
-        doctors = DoctorProfile.objects.all()
-        revenue = Order.objects.filter(payment_status="paid").aggregate(
-            total=Sum("total")
-        )["total"] or Decimal("0")
-        return Response(
-            {
-                "patients_count": patients.count(),
-                "doctors_count": doctors.count(),
-                "pending_doctor_verifications": doctors.filter(
-                    verification_status=VerificationStatus.PENDING
-                ).count(),
-                "appointments_today": Appointment.objects.filter(
-                    scheduled_at__date=today
-                ).count(),
-                "diagnostic_bookings_count": DiagnosticBooking.objects.count(),
-                "diagnostic_bookings_requested": DiagnosticBooking.objects.filter(
-                    status="requested"
-                ).count(),
-                "open_support_tickets": SupportTicket.objects.filter(
-                    status="open"
-                ).count(),
-                # Uploads still waiting on a human. Surfaced because a review
-                # queue nobody can see is a queue nobody works.
-                "prescriptions_pending": Prescription.objects.filter(
-                    status=Prescription.Status.PENDING,
-                ).count(),
-                "appointments_pending_payment": Appointment.objects.filter(
-                    consultation_mode=ConsultationMode.ONLINE,
-                    payment_status=AppointmentPaymentStatus.PENDING,
-                    status__in=[AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED],
-                ).count(),
-                "pharma_orders_count": Order.objects.count(),
-                "revenue_total": str(revenue),
-                "appointments_by_status": dict(
-                    Appointment.objects.values("status")
-                    .annotate(count=Count("id"))
-                    .values_list("status", "count"),
-                ),
-            }
-        )
+        return Response(build_dashboard_stats(request.query_params))
 
 
 class AdminPatientListAPIView(ListAPIView):
@@ -1327,14 +1628,21 @@ class AdminPatientListAPIView(ListAPIView):
     # OrderingFilter is a project-wide default backend; naming the list here
     # dropped it, so `?ordering=` was silently ignored on this endpoint.
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["is_active"]
-    search_fields = ["name", "phone", "email"]
-    ordering_fields = ["name", "date_joined"]
+    filterset_fields = ["is_active", "device", "source"]
+    search_fields = ["name", "phone", "email", "addresses__city"]
+    ordering_fields = [
+        "name",
+        "date_joined",
+        "last_active_at",
+        "appointment_count",
+        "order_count",
+    ]
 
     def get_queryset(self):
         return (
             User.objects.filter(is_staff=False)
             .exclude(provider__isnull=False)
+            .prefetch_related("addresses")
             .annotate(
                 appointment_count=Count("appointments", distinct=True),
                 order_count=Count("orders", distinct=True),
@@ -1348,13 +1656,37 @@ class AdminDoctorListAPIView(ListAPIView):
     serializer_class = AdminDoctorSerializer
     pagination_class = GenericPaginationClass
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["verification_status", "is_verified"]
-    search_fields = ["provider__name", "provider__user__phone", "clinic_city"]
-    ordering_fields = ["provider__name", "experience_years", "rating_avg", "created_at"]
+    filterset_fields = [
+        "verification_status",
+        "is_verified",
+        "is_online",
+        "clinic_city",
+    ]
+    search_fields = [
+        "provider__name",
+        "provider__specialty",
+        "provider__user__phone",
+        "clinic_name",
+        "clinic_city",
+    ]
+    ordering_fields = [
+        "provider__name",
+        "provider__specialty",
+        "clinic_city",
+        "clinic_name",
+        "experience_years",
+        "rating_avg",
+        "consultation_count",
+        "is_online",
+        "provider__user__last_active_at",
+        "created_at",
+    ]
 
     def get_queryset(self):
-        return DoctorProfile.objects.select_related("provider__user").order_by(
-            "-created_at"
+        return (
+            DoctorProfile.objects.select_related("provider__user")
+            .annotate(consultation_count=Count("appointments", distinct=True))
+            .order_by("-created_at")
         )
 
 
@@ -1420,6 +1752,44 @@ class AdminDoctorAvailabilityViewSet(viewsets.ModelViewSet):
             )
 
         serializer.save(doctor=doctor)
+
+
+class ProviderAvailabilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProviderAvailability
+        fields = (
+            "id",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "is_active",
+        )
+
+
+class AdminProviderAvailabilityViewSet(viewsets.ModelViewSet):
+    """Admin: weekly hours for a lab, diagnostic centre or home-care agency."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = ProviderAvailabilitySerializer
+    pagination_class = GenericPaginationClass
+    queryset = ProviderAvailability.objects.select_related("provider")
+    filterset_fields = ["provider", "is_active"]
+    ordering = ["day_of_week", "start_time"]
+
+    def perform_create(self, serializer):
+        provider_id = self.request.data.get("provider")
+        provider = get_object_or_404(Provider, pk=provider_id)
+        data = serializer.validated_data
+        clash = ProviderAvailability.objects.filter(
+            provider=provider,
+            day_of_week=data["day_of_week"],
+            start_time=data["start_time"],
+        ).exists()
+        if clash:
+            raise serializers.ValidationError(
+                {"start_time": "This centre already has a slot at that time."},
+            )
+        serializer.save(provider=provider)
 
 
 class BlockedDateSerializer(serializers.ModelSerializer):
@@ -1637,6 +2007,8 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             "specialty_ids",
             "biography",
             "qualifications",
+            "qualifications_ug",
+            "qualifications_pg",
             "experience_years",
             "languages",
             "fee_online",
@@ -1688,6 +2060,11 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             user = instance.provider.user
             user.phone = phone
             user.save(update_fields=["phone"])
+
+        if "qualifications_ug" in validated_data or "qualifications_pg" in validated_data:
+            ug = validated_data.get("qualifications_ug", instance.qualifications_ug)
+            pg = validated_data.get("qualifications_pg", instance.qualifications_pg)
+            validated_data["qualifications"] = list(ug or []) + list(pg or [])
 
         doctor = super().update(instance, validated_data)
         if "specialties" in validated_data:
@@ -1780,13 +2157,43 @@ class AdminDiagnosticBookingViewSet(viewsets.ModelViewSet):
     queryset = DiagnosticBooking.objects.prefetch_related(
         "tests", "packages"
     ).select_related("patient", "center")
-    filterset_fields = ["status", "patient"]
+    filterset_fields = [
+        "status",
+        "patient",
+        "kind",
+        "center",
+        "visit_type",
+        "center__city",
+    ]
     # `tests__name` spans a many-to-many, so a booking with three matching
     # tests would be returned three times; DRF's SearchFilter detects that
     # and applies .distinct() for us.
-    search_fields = ["patient__name", "patient__phone", "tests__name"]
-    ordering_fields = ["created_at", "scheduled_date", "total_amount"]
+    search_fields = [
+        "patient__name",
+        "patient__phone",
+        "tests__name",
+        "center__name",
+        "center__city",
+    ]
+    ordering_fields = [
+        "id",
+        "created_at",
+        "scheduled_date",
+        "total_amount",
+        "status",
+        "visit_type",
+        "center__name",
+        "center__city",
+        "patient__name",
+    ]
     http_method_names = ["get", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return apply_bucket(
+            super().get_queryset(),
+            self.request.query_params.get("bucket"),
+            BOOKING_BUCKETS,
+        )
 
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()

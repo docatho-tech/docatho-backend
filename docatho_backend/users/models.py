@@ -30,6 +30,25 @@ class User(AbstractUser):
     dob = models.DateField(_("Date of Birth"), blank=True, null=True)
     # profile_picture = models.URLField(_("Profile Picture"), blank=True, null=True)
 
+    # Where this account came from and what it last signed in on. The admin
+    # profile screens show all three, and support asks for the platform before
+    # anything else. Written by the app on login, never by the dashboard.
+    DEVICE_CHOICES = [("android", "Android"), ("ios", "iOS"), ("web", "Web")]
+    device = CharField(
+        _("Last device"),
+        max_length=16,
+        choices=DEVICE_CHOICES,
+        blank=True,
+        default="",
+    )
+    source = CharField(
+        _("Acquisition source"),
+        max_length=64,
+        blank=True,
+        default="",
+    )
+    last_active_at = models.DateTimeField(_("Last active"), null=True, blank=True)
+
     USERNAME_FIELD = "phone"
     REQUIRED_FIELDS = []
 
