@@ -155,6 +155,8 @@ class AdminOrderSerializer(OrderSerializer):
             "item_count",
             "patient_name",
             "patient_phone",
+            "rider_name",
+            "rider_code",
         )
 
 
@@ -179,6 +181,32 @@ class RazorpayConfirmSerializer(serializers.Serializer):
 class UpdateOrderStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Order.Status.choices)
     notes = serializers.CharField(required=False, allow_blank=True)
+    # Dispatch details, sent with the status change that causes them. The
+    # provider app has always posted `estimated_delivery_mins` alongside "mark
+    # as delivered" and it was silently dropped here, so the ETA the partner
+    # picked never reached the order the customer was watching.
+    estimated_delivery_mins = serializers.IntegerField(
+        required=False,
+        min_value=0,
+    )
+    rider_name = serializers.CharField(required=False, allow_blank=True)
+    rider_code = serializers.CharField(required=False, allow_blank=True)
+
+    #: Written straight onto the order before the status transition runs.
+    DISPATCH_FIELDS = ("estimated_delivery_mins", "rider_name", "rider_code")
+
+    def apply_dispatch_fields(self, order) -> None:
+        """Persist any dispatch detail that came with this status change."""
+        written = [
+            field
+            for field in self.DISPATCH_FIELDS
+            if self.validated_data.get(field) not in (None, "")
+        ]
+        if not written:
+            return
+        for field in written:
+            setattr(order, field, self.validated_data[field])
+        order.save(update_fields=[*written, "updated_at"])
 
 
 class AssignProviderSerializer(serializers.Serializer):
@@ -639,6 +667,7 @@ class AdminOrderList(viewsets.ReadOnlyModelViewSet):
         order = get_object_or_404(Order, pk=pk)
         serializer = UpdateOrderStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        serializer.apply_dispatch_fields(order)
         try:
             order.update_status(
                 new_status=serializer.validated_data["status"],

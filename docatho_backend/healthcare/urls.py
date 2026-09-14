@@ -81,6 +81,21 @@ urlpatterns = [
         name="provider-appointments",
     ),
     path(
+        "provider/appointments/<int:appointment_id>/",
+        views.ProviderAppointmentDetailAPIView.as_view(),
+        name="provider-appointment-detail",
+    ),
+    path(
+        "provider/diagnostic-bookings/",
+        views.ProviderDiagnosticBookingListAPIView.as_view(),
+        name="provider-diagnostic-bookings",
+    ),
+    path(
+        "provider/diagnostic-bookings/<int:booking_id>/",
+        views.ProviderDiagnosticBookingDetailAPIView.as_view(),
+        name="provider-diagnostic-booking-detail",
+    ),
+    path(
         "provider/appointments/<int:appointment_id>/video-token/",
         views.ProviderAppointmentVideoTokenAPIView.as_view(),
         name="provider-appointment-video-token",

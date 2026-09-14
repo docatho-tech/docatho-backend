@@ -26,6 +26,19 @@ RAZORPAY_WEBHOOK_SECRET = env("RZP_WEBHOOK_SECRET", default="")
 
 # E-Pharmacy settings
 # ------------------------------------------------------------------------------
+# How long a partner has to answer a request before the platform accepts it for
+# them. Both apps show the remaining time as a banner on the request, so the
+# number here is the one the patient is promised.
+#
+# Zero disables it: no banner, no sweep, requests wait for a human forever.
+# That is the default deliberately. Switching auto-accept on retroactively
+# confirms every request already older than the window — on a live database
+# that is a bulk change to real bookings, made by the first partner who opens
+# their queue. Turn it on when the business has decided the window, not as a
+# side effect of a deploy.
+AUTO_ACCEPT_MINUTES = env.int("AUTO_ACCEPT_MINUTES", default=0)
+
+# ------------------------------------------------------------------------------
 # Platform commission taken from each order's item subtotal, as a percentage.
 PHARMACY_COMMISSION_PERCENT = env.float("PHARMACY_COMMISSION_PERCENT", default=10.0)
 # Flat delivery fee applied at checkout (INR).

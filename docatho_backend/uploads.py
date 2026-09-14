@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from docatho_backend.masters.permissions import IsAdmin
+from docatho_backend.masters.permissions import IsProvider
 
 # Raster formats a browser will render inline, plus PDF for the verification
 # documents — a medical licence is rarely a photograph. SVG is deliberately
@@ -36,9 +37,17 @@ MAX_BYTES = 5 * 1024 * 1024
 
 
 class ImageUploadView(APIView):
-    """POST a file as multipart ``file``; get back ``{"url": ...}``."""
+    """POST a file as multipart ``file``; get back ``{"url": ...}``.
 
-    permission_classes = [IsAdmin]
+    Open to partners as well as staff: a diagnostic centre attaches its own
+    result PDFs from the provider app, and routing those through an
+    admin-only endpoint would have meant a second upload path for the same
+    bytes. Everything above still applies — type and size are checked here,
+    and the returned URL is only meaningful once it is written to a record the
+    caller is allowed to edit.
+    """
+
+    permission_classes = [IsAdmin | IsProvider]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):

@@ -5,6 +5,7 @@ from django.db import models
 from django.db.models import CharField
 from django.db.models import EmailField
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from phonenumber_field.modelfields import PhoneNumberField
 
@@ -28,7 +29,29 @@ class User(AbstractUser):
     username = None  # type: ignore[assignment]
     phone = PhoneNumberField(_("Phone Number"), blank=False)
     dob = models.DateField(_("Date of Birth"), blank=True, null=True)
-    # profile_picture = models.URLField(_("Profile Picture"), blank=True, null=True)
+
+    # Shown beside the age on every provider-facing patient card ("28 y •
+    # Female"). Blank is a real answer here — the patient apps do not force it —
+    # so the clients render the age alone rather than guessing.
+    GENDER_CHOICES = [("male", "Male"), ("female", "Female"), ("other", "Other")]
+    gender = CharField(
+        _("Gender"),
+        max_length=10,
+        choices=GENDER_CHOICES,
+        blank=True,
+        default="",
+    )
+    # A stored URL rather than an ImageField, matching
+    # `DoctorProfile.profile_picture`: bytes go to storage through
+    # /api/uploads/ and only the address is kept. CharField because that
+    # endpoint answers with a relative "/media/..." path on local disk, which
+    # URLField rejects.
+    profile_picture = CharField(
+        _("Profile Picture"),
+        max_length=500,
+        blank=True,
+        default="",
+    )
 
     # Where this account came from and what it last signed in on. The admin
     # profile screens show all three, and support asks for the platform before
@@ -58,6 +81,20 @@ class User(AbstractUser):
     def address(self):
         """Preferred delivery address: the default one, else the most recent."""
         return self.addresses.filter(is_default=True).first() or self.addresses.first()
+
+    @property
+    def age(self) -> int | None:
+        """Whole years since `dob`, or None when no date of birth is on file.
+
+        Computed rather than stored: an age column is wrong from the day after
+        it is written, and every screen that shows one shows it beside a name
+        the serializer is already fetching.
+        """
+        if self.dob is None:
+            return None
+        today = timezone.localdate()
+        had_birthday = (today.month, today.day) >= (self.dob.month, self.dob.day)
+        return today.year - self.dob.year - (0 if had_birthday else 1)
 
     def __str__(self) -> str:
         """Return a plain string for the user suitable for display in admin and logs.

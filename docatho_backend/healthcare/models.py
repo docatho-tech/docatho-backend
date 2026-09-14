@@ -222,6 +222,11 @@ class Appointment(BaseModel):
         default=AppointmentStatus.PENDING,
     )
     fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # The platform's cut of what the patient pays, shown as its own line in the
+    # payment summary both apps render ("Platform fee (incl. of GST)"). Kept
+    # apart from `fee`, which is the doctor's charge: the two are paid to
+    # different parties and a single total cannot be split back apart later.
+    platform_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_method = models.CharField(max_length=20, blank=True, default="")
     payment_status = models.CharField(
         max_length=20,
@@ -377,6 +382,11 @@ class DiagnosticTest(BaseModel):
     # through against; null means there is no discount to show, not zero.
     price = models.DecimalField(max_digits=10, decimal_places=2)
     mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    # What is actually collected — "Blood", "Urine", "Tissue". The provider app
+    # shows it beside the category on every test row, because it decides what
+    # the technician has to prepare for. Free text: the list is long, varies by
+    # lab, and a choices list would reject the next one.
+    sample_type = models.CharField(max_length=60, blank=True, default="")
     preparation_instructions = models.TextField(blank=True, default="")
     # A list of image URLs uploaded through /api/uploads/, same shape as
     # `DoctorProfile.clinic_images`. A test can show a sample report, the
@@ -518,6 +528,11 @@ class DiagnosticBooking(BaseModel):
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     patient_address = models.TextField(blank=True, default="")
     notes = models.TextField(blank=True, default="")
+    # Result documents the centre uploads, as URLs from /api/uploads/ — the
+    # same convention every other document in the product uses. A list, not one
+    # file: a booking can carry several tests and each has its own report, and
+    # a re-test adds a row rather than overwriting the first result.
+    reports = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

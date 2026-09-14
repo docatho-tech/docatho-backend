@@ -23,6 +23,8 @@ from rest_framework.views import APIView
 from docatho_backend.healthcare.appointment_payments import confirm_appointment_payment
 from docatho_backend.healthcare.appointment_payments import create_appointment_checkout
 from docatho_backend.healthcare.ai_service import HealthcareAIService
+from docatho_backend.healthcare.auto_accept import auto_accept_deadline
+from docatho_backend.healthcare.auto_accept import auto_accept_overdue
 from docatho_backend.healthcare.video import mint_video_token
 from docatho_backend.healthcare.video import patient_can_join_video
 from docatho_backend.healthcare.video import provider_can_join_video
@@ -126,6 +128,20 @@ class AppointmentSerializer(serializers.ModelSerializer):
     doctor_name = serializers.CharField(source="doctor.provider.name", read_only=True)
     doctor_id = serializers.IntegerField(source="doctor.id", read_only=True)
     patient_name = serializers.CharField(source="patient.name", read_only=True)
+    # The provider app's patient card shows "28 y • Female" with a photo and
+    # rings or navigates from the same card, so all five travel with the
+    # appointment rather than costing a second round trip per row.
+    patient_age = serializers.IntegerField(source="patient.age", read_only=True)
+    patient_gender = serializers.CharField(source="patient.gender", read_only=True)
+    patient_photo = serializers.CharField(
+        source="patient.profile_picture",
+        read_only=True,
+    )
+    patient_phone = serializers.SerializerMethodField()
+    patient_address = serializers.SerializerMethodField()
+    total_payable = serializers.SerializerMethodField()
+    previous_consultations = serializers.SerializerMethodField()
+    auto_accept_at = serializers.SerializerMethodField()
     can_join_video = serializers.SerializerMethodField()
     requires_payment = serializers.SerializerMethodField()
 
@@ -137,6 +153,15 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "doctor_id",
             "doctor_name",
             "patient_name",
+            "patient_age",
+            "patient_gender",
+            "patient_photo",
+            "patient_phone",
+            "patient_address",
+            "platform_fee",
+            "total_payable",
+            "previous_consultations",
+            "auto_accept_at",
             "scheduled_at",
             "consultation_mode",
             "status",
@@ -172,6 +197,72 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "completed_at",
             "created_at",
         )
+
+    def get_auto_accept_at(self, obj: Appointment):
+        """When this request gets accepted for the doctor, if they don't answer.
+
+        Null once it has been answered — a countdown on a confirmed appointment
+        would be counting down to nothing.
+        """
+        if obj.status != AppointmentStatus.PENDING:
+            return None
+        return auto_accept_deadline(obj.created_at)
+
+    def get_patient_phone(self, obj: Appointment) -> str:
+        return str(obj.patient.phone or "")
+
+    def get_patient_address(self, obj: Appointment) -> str:
+        address = obj.patient.address
+        if address is None:
+            return ""
+        parts = [
+            address.address_line1,
+            address.address_line2,
+            address.landmark,
+            address.city,
+        ]
+        return ", ".join(p for p in parts if p)
+
+    def get_total_payable(self, obj: Appointment) -> str:
+        """Consultation fee plus the platform's cut — what the patient pays.
+
+        Summed here rather than in each client: three apps render this line and
+        two of them would round it differently.
+        """
+        return str(obj.fee + obj.platform_fee)
+
+    def get_previous_consultations(self, obj: Appointment) -> list[dict]:
+        """This patient's last few completed consultations, with any doctor.
+
+        The provider app shows them on the appointment detail so the doctor can
+        see who has already seen this patient. Capped at five: it is context on
+        a card, not a medical history screen.
+
+        Only the detail views ask for it. Lists pass no flag and get an empty
+        list, because filling it there is one extra query per row for something
+        no list renders.
+        """
+        if not self.context.get("with_history"):
+            return []
+        past = (
+            Appointment.objects.filter(
+                patient_id=obj.patient_id,
+                status=AppointmentStatus.COMPLETED,
+            )
+            .exclude(pk=obj.pk)
+            .select_related("doctor__provider")
+            .order_by("-scheduled_at")[:5]
+        )
+        return [
+            {
+                "id": appointment.pk,
+                "doctor_name": appointment.doctor.provider.name,
+                "doctor_specialty": appointment.doctor.provider.specialty,
+                "doctor_photo": appointment.doctor.profile_picture,
+                "scheduled_at": appointment.scheduled_at,
+            }
+            for appointment in past
+        ]
 
     def get_can_join_video(self, obj: Appointment) -> bool:
         request = self.context.get("request")
@@ -319,6 +410,7 @@ class DiagnosticTestSerializer(serializers.ModelSerializer):
             "price",
             "mrp",
             "discount_percent",
+            "sample_type",
             "preparation_instructions",
             "images",
             "is_active",
@@ -406,6 +498,14 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
     packages = DiagnosticPackageSerializer(many=True, read_only=True)
     patient_name = serializers.CharField(source="patient.name", read_only=True)
     patient_phone = serializers.CharField(source="patient.phone", read_only=True)
+    # The centre's booking card shows the patient the same way the doctor's
+    # does — "28 y • Female" beside a photo.
+    patient_age = serializers.IntegerField(source="patient.age", read_only=True)
+    patient_gender = serializers.CharField(source="patient.gender", read_only=True)
+    patient_photo = serializers.CharField(
+        source="patient.profile_picture",
+        read_only=True,
+    )
     center_name = serializers.CharField(source="center.name", read_only=True, default="")
     center_logo = serializers.CharField(
         source="center.logo_url",
@@ -416,9 +516,17 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
     # the row names the lab the sample goes to.
     city = serializers.CharField(source="center.city", read_only=True, default="")
     test_count = serializers.SerializerMethodField()
+    auto_accept_at = serializers.SerializerMethodField()
 
     def get_test_count(self, obj):
         return obj.tests.count()
+
+    def get_auto_accept_at(self, obj):
+        """When an unanswered booking gets accepted for the centre. See
+        `auto_accept.py` — null once someone has answered it."""
+        if obj.status != DiagnosticBookingStatus.REQUESTED:
+            return None
+        return auto_accept_deadline(obj.created_at)
 
     class Meta:
         model = DiagnosticBooking
@@ -441,11 +549,16 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
             "total_amount",
             "patient_address",
             "notes",
+            "reports",
+            "auto_accept_at",
             "created_at",
             "patient_name",
             "patient_phone",
+            "patient_age",
+            "patient_gender",
+            "patient_photo",
         )
-        read_only_fields = ("id", "status", "total_amount", "created_at")
+        read_only_fields = ("id", "status", "total_amount", "created_at", "reports")
 
     def validate(self, attrs):
         # Only on create: an admin PATCHing a status sends neither list, and
@@ -1464,6 +1577,9 @@ class ProviderAppointmentListAPIView(APIView):
         profile = _doctor_profile_for_provider(request.user)
         if not profile:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        # Settle anything whose answer deadline has passed before answering, so
+        # the queue never shows a request the platform has already accepted.
+        auto_accept_overdue()
         qs = Appointment.objects.filter(doctor=profile).select_related(
             "patient", "doctor__provider"
         )
@@ -1505,6 +1621,168 @@ class ProviderAppointmentListAPIView(APIView):
         appointment.save(update_fields=update_fields)
         _notify_appointment_status_change(appointment, new_status)
         return Response(AppointmentSerializer(appointment).data)
+
+
+class ProviderAppointmentDetailAPIView(APIView):
+    """One appointment, with the patient history the detail screen shows.
+
+    The app used to carry every field across as navigation params, which meant
+    the detail screen showed whatever the list happened to have fetched and
+    could not show anything the list did not — the payment split and the
+    patient's previous consultations among them.
+    """
+
+    permission_classes = [IsProvider]
+
+    def get(self, request, appointment_id: int):
+        profile = _doctor_profile_for_provider(request.user)
+        if not profile:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        appointment = get_object_or_404(
+            Appointment.objects.select_related("patient", "doctor__provider"),
+            pk=appointment_id,
+            doctor=profile,
+        )
+        return Response(
+            AppointmentSerializer(
+                appointment,
+                context={"request": request, "with_history": True},
+            ).data,
+        )
+
+
+def _center_for_provider(user):
+    """The lab / diagnostic centre the signed-in partner runs, if any.
+
+    Bookings are attached to a `Provider`, not to a `DoctorProfile`, so this is
+    deliberately not `_doctor_profile_for_provider`: a centre has no doctor
+    profile and would have matched nothing.
+    """
+    if not is_provider(user):
+        return None
+    return Provider.objects.filter(user=user).first()
+
+
+#: What a centre is allowed to move a booking to. Deliberately narrower than
+#: `DiagnosticBookingStatus`: only an admin cancels on a patient's behalf, and
+#: `requested` is where a booking starts — nothing may move back into it.
+CENTER_ALLOWED_BOOKING_STATUSES = frozenset(
+    {
+        DiagnosticBookingStatus.CONFIRMED,
+        DiagnosticBookingStatus.SLOT_ALLOTTED,
+        DiagnosticBookingStatus.PATIENT_ARRIVED,
+        DiagnosticBookingStatus.SAMPLE_COLLECTED,
+        DiagnosticBookingStatus.TEST_DONE,
+        DiagnosticBookingStatus.IN_PROGRESS,
+        DiagnosticBookingStatus.REPORT_GENERATED,
+        DiagnosticBookingStatus.COMPLETED,
+        DiagnosticBookingStatus.CANCELLED,
+    },
+)
+
+
+class ProviderDiagnosticBookingListAPIView(APIView):
+    """The centre's own booking queue, newest slot first.
+
+    The centre app had no endpoint at all before this: the only booking APIs
+    were the patient's own list and the admin's, neither of which a partner
+    login can reach.
+    """
+
+    permission_classes = [IsProvider]
+
+    def get(self, request):
+        center = _center_for_provider(request.user)
+        if center is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        auto_accept_overdue()
+        qs = (
+            DiagnosticBooking.objects.filter(center=center)
+            .select_related("patient", "center")
+            .prefetch_related("tests__category", "packages")
+            .order_by("-scheduled_date", "-scheduled_time", "-created_at")
+        )
+        status_filter = request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        visit_type = request.query_params.get("visit_type")
+        if visit_type:
+            qs = qs.filter(visit_type=visit_type)
+        return Response(
+            DiagnosticBookingSerializer(
+                qs,
+                many=True,
+                context={"request": request},
+            ).data,
+        )
+
+
+class ProviderDiagnosticBookingDetailAPIView(APIView):
+    """Read one booking, move its status, or attach its reports."""
+
+    permission_classes = [IsProvider]
+
+    def _booking_or_404(self, request, booking_id: int):
+        center = _center_for_provider(request.user)
+        if center is None:
+            return None
+        return (
+            DiagnosticBooking.objects.filter(pk=booking_id, center=center)
+            .select_related("patient", "center")
+            .prefetch_related("tests__category", "packages")
+            .first()
+        )
+
+    def _serialized(self, request, booking):
+        return Response(
+            DiagnosticBookingSerializer(booking, context={"request": request}).data,
+        )
+
+    def get(self, request, booking_id: int):
+        booking = self._booking_or_404(request, booking_id)
+        if booking is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return self._serialized(request, booking)
+
+    def patch(self, request, booking_id: int):
+        booking = self._booking_or_404(request, booking_id)
+        if booking is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        update_fields = ["updated_at"]
+
+        new_status = request.data.get("status")
+        if new_status is not None:
+            if new_status not in CENTER_ALLOWED_BOOKING_STATUSES:
+                return Response(
+                    {"detail": f"Centres cannot set status '{new_status}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            booking.status = new_status
+            update_fields.append("status")
+
+        # Report URLs from /api/uploads/, appended rather than replaced: a
+        # second upload is another test's result, not a correction of the first.
+        reports = request.data.get("reports")
+        if reports is not None:
+            if not isinstance(reports, list) or not all(
+                isinstance(url, str) and url.strip() for url in reports
+            ):
+                return Response(
+                    {"detail": "`reports` must be a list of upload URLs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            booking.reports = [*booking.reports, *reports]
+            update_fields.append("reports")
+
+        if len(update_fields) == 1:
+            return Response(
+                {"detail": "Send `status`, `reports`, or both."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        booking.save(update_fields=update_fields)
+        return self._serialized(request, booking)
 
 
 class ProviderAppointmentVideoTokenAPIView(APIView):

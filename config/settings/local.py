@@ -1,4 +1,11 @@
+import socket
+
 from .base import *  # noqa: F403
+
+# On by default for local work so the countdown banner and the sweep can be
+# seen. Production leaves it at the base default of 0 until the window is a
+# decision someone has made — see the note in base.py.
+AUTO_ACCEPT_MINUTES = env.int("AUTO_ACCEPT_MINUTES", default=180)  # noqa: F405
 from .base import INSTALLED_APPS
 from .base import MIDDLEWARE
 from .base import env
@@ -17,8 +24,22 @@ ALLOWED_HOSTS = [
     "localhost",
     "0.0.0.0",
     "127.0.0.1",
+    # The Android emulator reaches the host machine at this alias, and a phone
+    # on the same wifi reaches it by LAN address. Without them every request
+    # from a device answers 400 DisallowedHost, which reads in the app as a
+    # bare network failure and sends you looking at the wrong layer.
+    "10.0.2.2",
     "65.1.83.112",
     "api.docatho.com",
+]
+
+# Plus whatever LAN address this machine currently answers on, so a phone or
+# emulator on the same wifi reaches the dev server without this list being
+# edited for each new IP. Local settings only — production keeps its fixed list.
+ALLOWED_HOSTS += [
+    address
+    for address in socket.gethostbyname_ex(socket.gethostname())[2]
+    if address not in ALLOWED_HOSTS
 ]
 
 # CACHES
