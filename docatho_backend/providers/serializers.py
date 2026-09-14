@@ -7,6 +7,8 @@ from rest_framework import serializers
 from docatho_backend.providers.enums import ProviderType
 from docatho_backend.providers.models import OnboardingStatus
 from docatho_backend.providers.models import Provider
+from docatho_backend.users.helper import find_user_by_phone
+from docatho_backend.users.helper import normalise_phone
 from docatho_backend.users.models import User
 
 
@@ -57,9 +59,11 @@ def _provider_sale_summary(provider: Provider) -> dict:
 
 
 class UserSerializer(serializers.ModelSerializer):
+    age = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = User
-        fields = ["id", "name", "email", "phone", "dob"]
+        fields = ["id", "name", "email", "phone", "dob", "age", "gender", "profile_picture"]
 
 
 class ProviderSerializer(serializers.ModelSerializer):
@@ -70,6 +74,11 @@ class ProviderSerializer(serializers.ModelSerializer):
             "name",
             "specialty",
             "provider_type",
+            # The partner app's home header greets by name and shows where the
+            # branch is underneath it, with the logo as the avatar.
+            "logo_url",
+            "city",
+            "location",
             "bank_account_name",
             "bank_account_number",
             "bank_ifsc",
@@ -120,7 +129,10 @@ class AdminProviderSerializer(serializers.ModelSerializer):
     )
 
     def validate_phone(self, value):
-        phone = (value or "").strip()
+        # Stored in E.164 whatever the operator typed. Saving the bare ten
+        # digits locked the partner out of their own app: the apps look up
+        # "+91…" and missed the row the admin was looking at.
+        phone = normalise_phone(value)
         if not phone:
             raise serializers.ValidationError("Phone is required.")
 
@@ -345,12 +357,18 @@ class AdminProviderCreateSerializer(serializers.Serializer):
                 provider.invited_at = timezone.now()
 
     def create(self, validated_data):
-        phone = validated_data["phone"]
+        # Normalised on the way in, and matched against every spelling already
+        # in the table — otherwise onboarding the same partner twice, once with
+        # the code and once without, makes two accounts for one phone.
+        phone = normalise_phone(validated_data["phone"])
         email = validated_data.get("email") or None
-        user, _ = User.objects.get_or_create(
-            phone=phone,
-            defaults={"name": validated_data["name"], "email": email},
-        )
+        user = find_user_by_phone(phone)
+        if user is None:
+            user = User.objects.create(
+                phone=phone,
+                name=validated_data["name"],
+                email=email,
+            )
         if hasattr(user, "provider"):
             provider = user.provider
             provider.name = validated_data["name"]

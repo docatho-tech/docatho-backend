@@ -177,6 +177,12 @@ class Order(BaseModel):
         default=Decimal("0.00"),
     )
 
+    # Who is carrying the order. The pharmacy app shows both on every in-transit
+    # and delivered row ("Rider : RDR-218", "I. Prakash"), and the customer asks
+    # for the code, not the name, when they ring about a late delivery.
+    rider_name = models.CharField(max_length=120, blank=True, default="")
+    rider_code = models.CharField(max_length=40, blank=True, default="")
+
     stock_reserved = models.BooleanField(default=False)
     estimated_delivery_mins = models.IntegerField(default=0)
     placed_at = models.DateTimeField(default=timezone.now)

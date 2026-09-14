@@ -31,6 +31,7 @@ from docatho_backend.providers.serializers import AdminProviderSerializer
 from docatho_backend.providers.serializers import ProviderBankSerializer
 from docatho_backend.providers.serializers import ProviderSerializer
 from docatho_backend.providers.serializers import UserSerializer
+from docatho_backend.users.helper import find_user_by_phone
 from docatho_backend.users.helper import generate_otp
 from docatho_backend.users.models import PhoneOtp
 from docatho_backend.users.models import User
@@ -167,9 +168,7 @@ class SendOTPAPIView(APIView):
 
     def post(self, request):
         phone = request.data.get("phone")
-        try:
-            User.objects.get(phone=phone)
-        except User.DoesNotExist:
+        if find_user_by_phone(phone) is None:
             return Response(
                 {"detail": "User not found"},
                 status=status.HTTP_404_NOT_FOUND,
@@ -199,9 +198,8 @@ class VerifyOTPAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        try:
-            user = User.objects.get(phone=phone)
-        except User.DoesNotExist:
+        user = find_user_by_phone(phone)
+        if user is None:
             return Response(
                 {"detail": "User not found"},
                 status=status.HTTP_404_NOT_FOUND,
@@ -255,6 +253,7 @@ class ChemistOrderUpdateAPIView(APIView):
                 {"detail": f"Providers cannot set status '{new_status}'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        serializer.apply_dispatch_fields(order)
         try:
             order.update_status(
                 new_status=new_status,
