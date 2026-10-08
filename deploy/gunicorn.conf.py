@@ -5,14 +5,17 @@ Binds a unix socket that nginx proxies to.
 """
 
 import multiprocessing
+import os
 
 # Bind to a unix socket in the systemd RuntimeDirectory (/run/docatho).
 bind = "unix:/run/docatho/gunicorn.sock"
 # Make the socket group-accessible so nginx (group www-data) can reach it.
 umask = 0o007
 
-# Worker processes. Override with GUNICORN_WORKERS if the instance is small.
-workers = int(multiprocessing.cpu_count() * 2 + 1)
+# Worker processes. cpu_count() * 2 + 1 assumes the box has memory to match;
+# a t3.micro has 2 vCPUs and under 1 GB, where five Django workers OOM. Set
+# GUNICORN_WORKERS in /etc/docatho/docatho.env to cap it.
+workers = int(os.environ.get("GUNICORN_WORKERS") or multiprocessing.cpu_count() * 2 + 1)
 worker_class = "sync"
 
 # Timeouts / recycling.

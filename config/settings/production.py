@@ -102,7 +102,9 @@ STORAGES = {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
             "location": "static",
-            "default_acl": "public-read",
+            # No default_acl: the bucket has Object Ownership = bucket owner
+            # enforced (ACLs disabled), so a per-object ACL is rejected with
+            # AccessControlListNotSupported. The bucket policy grants the read.
         },
     },
 }
