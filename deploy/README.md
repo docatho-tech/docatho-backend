@@ -40,9 +40,12 @@ sudo -u docatho git clone https://github.com/<org>/docatho-backend.git /opt/doca
 cd /opt/docatho/docatho-backend
 sudo -u docatho uv sync --locked
 
-# Environment file (fill in real values)
+# Environment file (fill in real values).
+# deploy.sh sources this as the deploy user, so it is group-readable by
+# docatho — root-only 600 breaks CD.
 sudo cp deploy/docatho.env.example /etc/docatho/docatho.env
-sudo chmod 600 /etc/docatho/docatho.env
+sudo chown root:docatho /etc/docatho/docatho.env
+sudo chmod 640 /etc/docatho/docatho.env
 sudo nano /etc/docatho/docatho.env
 
 # Postgres DB + user (match POSTGRES_* in the env file)

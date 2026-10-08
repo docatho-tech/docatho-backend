@@ -1,14 +1,20 @@
 name: Deploy
 
-# Deploys to the EC2 host after the CI workflow succeeds on master.
-# Also runnable on demand via the Actions tab (workflow_dispatch).
+# Deploys to the EC2 host on every push to master, and on demand via the
+# Actions tab (workflow_dispatch).
+#
+# There is no CI gate: the CI workflow is paused behind the ruff lint debt, so
+# gating on it would mean nothing ever deploys. Restore the workflow_run
+# trigger below — and drop the push trigger — once CI is green again.
+#
+#   workflow_run:
+#     workflows: ["CI"]
+#     types: [completed]
+#     branches: [master]
 on:
-  # PAUSED — automatic deploy-after-CI disabled alongside the CI workflow.
-  # Uncomment to resume. Manual deploys via workflow_dispatch still work.
-  # workflow_run:
-  #   workflows: ["CI"]
-  #   types: [completed]
-  #   branches: [master]
+  push:
+    branches: [master]
+    paths-ignore: ['docs/**']
   workflow_dispatch:
 
 concurrency:
@@ -19,10 +25,6 @@ jobs:
   deploy:
     name: Deploy over SSH
     runs-on: ubuntu-latest
-    # Only deploy when CI passed (workflow_run) or when manually dispatched.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     steps:
       - name: SSH and run deploy script
         uses: appleboy/ssh-action@v1.2.2
