@@ -52,6 +52,7 @@ class PrescriptionSerializer(serializers.ModelSerializer):
 class OrderItemSerializer(serializers.ModelSerializer):
     medicine_id = serializers.IntegerField(read_only=True)
     medicine_name = serializers.CharField(source="medicine.name", read_only=True)
+    medicine_unit = serializers.CharField(source="medicine.pack_unit", read_only=True)
 
     class Meta:
         model = OrderItem
@@ -59,6 +60,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "id",
             "medicine_id",
             "medicine_name",
+            "medicine_unit",
             "quantity",
             "unit_price",
             "mrp",

@@ -24,6 +24,9 @@ from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.orders.views import AdminOrderSerializer
 from docatho_backend.orders.views import UpdateOrderStatusSerializer
 from docatho_backend.orders.views import _notify_status_change
+from docatho_backend.providers.earnings import earnings_lines
+from docatho_backend.providers.earnings import next_payout
+from docatho_backend.providers.earnings import week_total
 from docatho_backend.providers.models import OnboardingStatus
 from docatho_backend.providers.models import Provider
 from docatho_backend.providers.serializers import AdminProviderCreateSerializer
@@ -34,7 +37,6 @@ from docatho_backend.providers.serializers import UserSerializer
 from docatho_backend.users.helper import find_user_by_phone
 from docatho_backend.users.helper import generate_otp
 from docatho_backend.users.models import PhoneOtp
-from docatho_backend.users.models import User
 
 DEC = DecimalField(max_digits=14, decimal_places=2)
 ZERO = Value(0, output_field=DEC)
@@ -216,8 +218,31 @@ class VerifyOTPAPIView(APIView):
         return Response({"detail": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
 
 
+#: The pharmacy dashboard's three tabs, as sets of order statuses.
+CHEMIST_BUCKETS = {
+    "new": [Order.Status.PLACED],
+    "in_progress": [
+        Order.Status.APPROVED,
+        Order.Status.CONFIRMED,
+        Order.Status.PROCESSING,
+        Order.Status.PACKED,
+        Order.Status.OUT_FOR_DELIVERY,
+    ],
+    "completed": [Order.Status.DELIVERED],
+}
+
+
 class ChemistOrderListAPIView(ListAPIView):
-    """Incoming/assigned order queue for the current provider (EP-06)."""
+    """Incoming/assigned order queue for the current provider (EP-06).
+
+    ``?bucket=`` narrows to one of the dashboard's three tabs. The app used to
+    ask for every order and keep the in-progress ones out of the page it got
+    back, which showed whatever of those ten rows happened to be in progress and
+    then reported the unfiltered total beside the tab.
+
+    Every response carries ``counts`` for all three buckets, because the design
+    puts a number on each tab and only one of them can be the page's own total.
+    """
 
     permission_classes = [IsProvider]
     pagination_class = GenericPaginationClass
@@ -225,11 +250,29 @@ class ChemistOrderListAPIView(ListAPIView):
     filterset_fields = ["status"]
     serializer_class = AdminOrderSerializer
 
+    def _provider_orders(self):
+        provider = _provider_for(self.request.user)
+        return Order.objects.filter(assigned_provider=provider)
+
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return Order.objects.none()
-        provider = _provider_for(self.request.user)
-        return Order.objects.filter(assigned_provider=provider).order_by("-placed_at")
+        queryset = self._provider_orders().order_by("-placed_at")
+        statuses = CHEMIST_BUCKETS.get(self.request.query_params.get("bucket", ""))
+        if statuses:
+            queryset = queryset.filter(status__in=statuses)
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        if getattr(self, "swagger_fake_view", False):
+            return response
+        all_orders = self._provider_orders()
+        response.data["counts"] = {
+            name: all_orders.filter(status__in=statuses).count()
+            for name, statuses in CHEMIST_BUCKETS.items()
+        }
+        return response
 
 
 class ChemistOrderUpdateAPIView(APIView):
@@ -355,7 +398,14 @@ class ProviderBankAPIView(APIView):
 
 
 class ProviderEarningsAPIView(APIView):
-    """The current provider's earnings from delivered/paid orders (EP-07)."""
+    """The current provider's earnings (EP-07), and the "My Earnings" screen.
+
+    The aggregate keys are the original contract and are unchanged. The three
+    added blocks are what the design shows above them: what this week came to,
+    when the next payout lands and into which account, and the individual lines
+    that add up to it — a partner reconciling a bank transfer needs the rows,
+    not a total that cannot be checked.
+    """
 
     permission_classes = [IsProvider]
 
@@ -378,6 +428,7 @@ class ProviderEarningsAPIView(APIView):
             .exclude(status__in=Order.STOCK_RELEASING_STATUSES)
             .aggregate(payout=Coalesce(Sum("provider_earning"), ZERO))
         )
+        lines = earnings_lines(provider)
         return Response(
             {
                 "total_orders": earned["total_orders"],
@@ -385,5 +436,8 @@ class ProviderEarningsAPIView(APIView):
                 "commission": earned["commission"],
                 "payout": earned["payout"],
                 "pending_payout": pending["payout"],
+                "week_total": week_total(lines),
+                "next_payout": next_payout(provider, pending["payout"], lines),
+                "lines": lines,
             },
         )

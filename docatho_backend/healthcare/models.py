@@ -81,6 +81,9 @@ class DoctorProfile(BaseModel):
     consultation_modes = models.JSONField(default=list, blank=True)
     rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0)
     review_count = models.PositiveIntegerField(default=0)
+    # The council registration number that has to appear on a prescription —
+    # a signed Rx without one is not a valid prescription.
+    medical_reg_no = models.CharField(max_length=64, blank=True, default="")
     clinic_name = models.CharField(max_length=255, blank=True, default="")
     clinic_address = models.TextField(blank=True, default="")
     clinic_city = models.CharField(max_length=100, blank=True, default="")
@@ -318,6 +321,87 @@ class ConsultationMessage(BaseModel):
         return f"Msg #{self.pk} on appt {self.appointment_id}"
 
 
+class PrescriptionSource(models.TextChoices):
+    """Where the prescription document came from.
+
+    A doctor filling the form in the app produces a *generated* PDF; a doctor
+    or an admin attaching the sheet they wrote by hand produces an *uploaded*
+    one. The patient gets a document either way, and only one of the two can
+    be edited afterwards — so which it is has to be recorded.
+    """
+
+    GENERATED = "generated", "Generated"
+    UPLOADED = "uploaded", "Uploaded"
+
+
+class AppointmentPrescription(BaseModel):
+    """The e-prescription for one consultation.
+
+    Separate from `orders.Prescription`, which is the photo a patient uploads
+    at pharmacy checkout to buy a scheduled drug. This one is written by the
+    doctor, belongs to an appointment, and is the document the patient is
+    handed after the call.
+
+    The clinical fields are free text because that is how they are dictated —
+    "120/80", "BP slightly high, review in 2 weeks". `medications` is the one
+    exception: the table in the format has four columns per row, and a blob of
+    prose could not be re-rendered into it.
+    """
+
+    appointment = models.OneToOneField(
+        Appointment,
+        on_delete=models.CASCADE,
+        related_name="prescription",
+    )
+    source = models.CharField(
+        max_length=16,
+        choices=PrescriptionSource.choices,
+        default=PrescriptionSource.GENERATED,
+    )
+    # Who signed it. An admin uploading on a doctor's behalf is a real case
+    # (the doctor sent the sheet over WhatsApp), and the record should say so.
+    issued_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="prescriptions_issued",
+    )
+
+    # Vitals as written, not as numbers: "120/80" is one reading in one box,
+    # and a doctor who did not take a pulse leaves the box empty rather than
+    # entering a zero.
+    bp = models.CharField(max_length=32, blank=True, default="")
+    pulse = models.CharField(max_length=32, blank=True, default="")
+    weight = models.CharField(max_length=32, blank=True, default="")
+    height = models.CharField(max_length=32, blank=True, default="")
+
+    complaints = models.TextField(blank=True, default="")
+    allergies = models.TextField(blank=True, default="")
+    diagnosis = models.TextField(blank=True, default="")
+    advice = models.TextField(blank=True, default="")
+    #: ``[{"type": "Tab", "drug": "…", "dose": "1-0-1", "duration": "5 days"}]``
+    medications = models.JSONField(default=list, blank=True)
+    instructions = models.TextField(blank=True, default="")
+    follow_up = models.CharField(max_length=255, blank=True, default="")
+
+    #: The rendered PDF, for a generated prescription.
+    pdf = models.FileField(
+        upload_to="prescriptions/appointments/%Y/%m/",
+        blank=True,
+        null=True,
+    )
+    #: An /api/uploads/ URL, for an uploaded one — the same way every other
+    #: document in the product is addressed.
+    document_url = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Rx for appt {self.appointment_id} ({self.source})"
+
+
 class AppointmentPaymentTransaction(BaseModel):
     appointment = models.ForeignKey(
         Appointment,
@@ -392,6 +476,20 @@ class DiagnosticTest(BaseModel):
     # `DoctorProfile.clinic_images`. A test can show a sample report, the
     # equipment and the collection kit, so one field would not do.
     images = models.JSONField(default=list, blank=True)
+    # The lab's own reference for the test — "LAB-CT" — printed on its rate card
+    # and shown on every catalogue row beside the turnaround.
+    code = models.CharField(max_length=32, blank=True, default="")
+    # How long the report takes: "24 hours", "Same day", "2 days". Free text
+    # because it is a promise a lab makes in its own words, not a duration the
+    # platform computes.
+    turnaround = models.CharField(max_length=40, blank=True, default="")
+    # What the platform pays the lab, against `mrp` which the patient is shown.
+    partner_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     is_active = models.BooleanField(default=True)
     test_kind = models.CharField(
         max_length=20,
@@ -500,7 +598,7 @@ class DiagnosticBooking(BaseModel):
     # anything reading a booking's tests keeps working; this records what was
     # actually sold, and at which price.
     packages = models.ManyToManyField(
-        DiagnosticPackage, related_name="bookings", blank=True
+        DiagnosticPackage, related_name="bookings", blank=True,
     )
     kind = models.CharField(
         max_length=32,

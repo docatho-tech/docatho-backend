@@ -19,6 +19,11 @@ class NotificationType(models.TextChoices):
     APPOINTMENT_REJECTED = "appointment_rejected", _("Appointment rejected")
     APPOINTMENT_COMPLETED = "appointment_completed", _("Appointment completed")
     APPOINTMENT_CANCELLED = "appointment_cancelled", _("Appointment cancelled")
+    APPOINTMENT_REMINDER = "appointment_reminder", _("Appointment reminder")
+    # The patient is in the room and the doctor is not — the one notification
+    # the partner app turns into a join button.
+    APPOINTMENT_WAITING = "appointment_waiting", _("Patient waiting in room")
+    APPOINTMENT_RATED = "appointment_rated", _("Appointment rated")
     DIAG_BOOKING_REQUESTED = "diag_booking_requested", _("Diagnostic booking requested")
     DIAG_BOOKING_CONFIRMED = "diag_booking_confirmed", _("Diagnostic booking confirmed")
     DIAG_BOOKING_CANCELLED = "diag_booking_cancelled", _("Diagnostic booking cancelled")

@@ -102,10 +102,20 @@ def test_provider_appointment_status_notifies_patient(
         )
 
     assert resp.status_code == 200
-    mock_notify.assert_called_once()
-    call = mock_notify.call_args
-    assert call.args[0] == patient
-    assert call.args[1] == expected_type
+    # The patient is always told; completion also tells the doctor, whose
+    # notification list hangs "Add notes" off that row.
+    patient_calls = [c for c in mock_notify.call_args_list if c.args[0] == patient]
+    assert len(patient_calls) == 1
+    assert patient_calls[0].args[1] == expected_type
+
+    provider_calls = [
+        c for c in mock_notify.call_args_list if c.args[0] == doctor.provider.user
+    ]
+    if new_status == AppointmentStatus.COMPLETED:
+        assert len(provider_calls) == 1
+        assert provider_calls[0].args[1] == NotificationType.APPOINTMENT_COMPLETED
+    else:
+        assert provider_calls == []
 
 
 def test_diagnostic_booking_create_notifies_patient(auth_client):
