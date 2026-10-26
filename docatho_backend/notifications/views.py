@@ -29,7 +29,15 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return Notification.objects.none()
-        return Notification.objects.filter(recipient=self.request.user)
+        queryset = Notification.objects.filter(recipient=self.request.user)
+        # The partner app's "In clinic Visits" / "Online Consults" tabs. It has
+        # to be a server-side filter: a page narrowed in the client shows
+        # whatever of that page matched and then stops paginating, which reads
+        # as "that is all of them".
+        mode = self.request.query_params.get("mode")
+        if mode in ("online", "in_clinic"):
+            queryset = queryset.filter(data__consultation_mode=mode)
+        return queryset
 
     @action(detail=False, methods=["get"], url_path="unread_count")
     def unread_count(self, request):

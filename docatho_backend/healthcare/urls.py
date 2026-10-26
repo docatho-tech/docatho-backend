@@ -3,6 +3,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from docatho_backend.healthcare import views
+from docatho_backend.healthcare.prescription_api import AppointmentPrescriptionAPIView
 
 router = DefaultRouter()
 router.register("appointments", views.AppointmentViewSet, basename="appointment")
@@ -84,6 +85,18 @@ urlpatterns = [
         "provider/appointments/<int:appointment_id>/",
         views.ProviderAppointmentDetailAPIView.as_view(),
         name="provider-appointment-detail",
+    ),
+    # One view, three doors: the doctor writes it in the partner app, an admin
+    # attaches it from the portal, and the patient reads it in theirs.
+    path(
+        "provider/appointments/<int:appointment_id>/prescription/",
+        AppointmentPrescriptionAPIView.as_view(),
+        name="provider-appointment-prescription",
+    ),
+    path(
+        "admin/appointments/<int:appointment_id>/prescription/",
+        AppointmentPrescriptionAPIView.as_view(),
+        name="admin-appointment-prescription",
     ),
     path(
         "provider/diagnostic-bookings/",

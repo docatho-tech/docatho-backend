@@ -1,5 +1,8 @@
 from django.urls import path
 
+from .partner_screens import ProviderCatalogAPIView
+from .partner_screens import ProviderInsightsAPIView
+from .statement import ProviderStatementAPIView
 from .views import AdminProviderDetailAPIView
 from .views import AdminProviderListCreateAPIView
 from .views import ChemistOrderListAPIView
@@ -31,6 +34,9 @@ urlpatterns = [
     path("profile/", ProviderProfileAPIView.as_view(), name="profile"),
     path("bank/", ProviderBankAPIView.as_view(), name="bank"),
     path("earnings/", ProviderEarningsAPIView.as_view(), name="earnings"),
+    path("insights/", ProviderInsightsAPIView.as_view(), name="insights"),
+    path("statement/", ProviderStatementAPIView.as_view(), name="statement"),
+    path("catalog/", ProviderCatalogAPIView.as_view(), name="catalog"),
     path(
         "chemist-order-list/",
         ChemistOrderListAPIView.as_view(),
