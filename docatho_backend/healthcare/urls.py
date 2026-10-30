@@ -62,6 +62,16 @@ urlpatterns = [
     path("saved-doctors/", views.SavedDoctorAPIView.as_view(), name="saved-doctors"),
     path("ai/chat/", views.AIChatAPIView.as_view(), name="ai-chat"),
     path(
+        "ai/chat/sessions/",
+        views.AIChatSessionListAPIView.as_view(),
+        name="ai-chat-sessions",
+    ),
+    path(
+        "ai/chat/sessions/<int:session_id>/",
+        views.AIChatSessionDetailAPIView.as_view(),
+        name="ai-chat-session-detail",
+    ),
+    path(
         "ai/prescription-analysis/",
         views.AIPrescriptionAnalysisAPIView.as_view(),
         name="ai-prescription",
