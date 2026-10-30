@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.db.models import Count
+from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -1106,10 +1107,39 @@ class DoctorListAPIView(ListAPIView):
         specialty = self.request.query_params.get("specialty")
         city = self.request.query_params.get("city")
         if specialty:
-            qs = qs.filter(specialties__id=specialty)
+            qs = self._filter_by_specialty(qs, specialty)
         if city:
             qs = qs.filter(clinic_city__icontains=city)
         return qs.distinct()
+
+    @staticmethod
+    def _filter_by_specialty(qs, specialty: str):
+        """Match the `specialties` rows, falling back to the provider's own text.
+
+        Only a handful of doctors have ever had the `specialties` M2M filled
+        in; the rest carry the same information as free text in
+        `Provider.specialty`, which is what the onboarding form writes. Keying
+        the filter purely on the M2M meant the speciality grid in the apps
+        returned an empty list for nearly every speciality a patient tapped.
+
+        A numeric value is still read as a MedicalSpecialty id — that is what
+        the clients send — but the name behind that id is also matched against
+        the text field so linked and unlinked doctors come back together. A
+        non-numeric value is treated as the name directly.
+        """
+        name = specialty
+        if specialty.isdigit():
+            linked = Q(specialties__id=specialty)
+            name = (
+                MedicalSpecialty.objects.filter(pk=specialty)
+                .values_list("name", flat=True)
+                .first()
+            )
+            if not name:
+                return qs.filter(linked)
+        else:
+            linked = Q(specialties__name__iexact=specialty)
+        return qs.filter(linked | Q(provider__specialty__iexact=name))
 
 
 class DoctorDetailAPIView(APIView):
@@ -1590,6 +1620,65 @@ class AIChatAPIView(APIView):
                 "reply": result.content,
                 "source": result.source,
                 "metadata": result.metadata,
+            },
+        )
+
+
+class AIChatSessionListAPIView(APIView):
+    """The "All chats" list: one row per past session, newest first.
+
+    The preview is the last assistant turn rather than the last turn outright —
+    the title already carries what the user opened with, so echoing their own
+    words under it reads as a repeat.
+    """
+
+    permission_classes = [IsCustomer]
+
+    def get(self, request):
+        sessions = (
+            AIChatSession.objects.filter(user=request.user)
+            .prefetch_related("messages")
+            .order_by("-created_at")
+        )
+        data = []
+        for session in sessions:
+            messages = list(session.messages.all())
+            last_reply = next(
+                (m for m in reversed(messages) if m.role == "assistant"),
+                None,
+            )
+            data.append(
+                {
+                    "id": session.id,
+                    "title": session.title or "Health chat",
+                    "preview": last_reply.content if last_reply else "",
+                    "updated_at": (
+                        messages[-1].created_at if messages else session.created_at
+                    ),
+                },
+            )
+        return Response(data)
+
+
+class AIChatSessionDetailAPIView(APIView):
+    """Every turn of one session, so a tapped chat reopens where it left off."""
+
+    permission_classes = [IsCustomer]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(AIChatSession, pk=session_id, user=request.user)
+        return Response(
+            {
+                "id": session.id,
+                "title": session.title or "Health chat",
+                "messages": [
+                    {
+                        "role": m.role,
+                        "content": m.content,
+                        "created_at": m.created_at,
+                    }
+                    for m in session.messages.all()
+                ],
             },
         )
 
