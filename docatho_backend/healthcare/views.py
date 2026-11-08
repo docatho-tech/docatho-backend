@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 from django.db.models import Count
+from django.db.models import ExpressionWrapper
+from django.db.models import F
+from django.db.models import FloatField
+from django.db.models import Max
 from django.db.models import Q
+from django.db.models import Value
+from django.db.models.functions import Cast
+from django.db.models.functions import Power
+from django.db.models.functions import Sqrt
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -70,6 +79,7 @@ from docatho_backend.notifications.services import notify
 from docatho_backend.orders.models import Prescription
 from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.providers.enums import ProviderType
+from docatho_backend.providers.models import OnboardingStatus
 from docatho_backend.providers.models import Provider
 from docatho_backend.users.models import User
 
@@ -432,6 +442,13 @@ class DiagnosticTestSerializer(serializers.ModelSerializer):
             "sample_type",
             "preparation_instructions",
             "images",
+            # The test row on the centre screen reads "LAB-CT · Reports within
+            # 1 day · Home sample available". All three were on the model and
+            # none were serialized, which is why HealthMark's turnaround is
+            # sitting in `description` as prose.
+            "code",
+            "turnaround",
+            "home_sample_available",
             "is_active",
             "test_kind",
         )
@@ -1458,12 +1475,196 @@ class DiagnosticTestViewSet(viewsets.ModelViewSet):
     serializer_class = DiagnosticTestSerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
-    filterset_fields = ["category", "is_active", "provider", "test_kind"]
+    filterset_fields = [
+        "category",
+        "is_active",
+        "provider",
+        "test_kind",
+        "home_sample_available",
+    ]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "price", "mrp", "created_at"]
 
     def get_queryset(self):
         return _visible_to(super().get_queryset(), self.request)
+
+
+# Types a patient browsing "Diagnostics" expects to find. `Lab` and
+# `Diagnostic Center` are the same business to them — which one a partner was
+# filed under is an admin's choice on the onboarding form, so keying the list
+# on one of the two hides real centres.
+DIAGNOSTIC_PROVIDER_TYPES = (
+    ProviderType.DIAGNOSTIC_CENTER.value,
+    ProviderType.LAB.value,
+)
+
+# Percent off list price, per test, in SQL — the aggregate form of
+# `DiagnosticTest.discount_percent`. Only ever used under a filter that
+# excludes mrp <= 0, which would divide by zero.
+_TEST_DISCOUNT = ExpressionWrapper(
+    (F("diagnostic_tests__mrp") - F("diagnostic_tests__price"))
+    * 100
+    / F("diagnostic_tests__mrp"),
+    output_field=FloatField(),
+)
+
+
+def _float_param(request, name):
+    """Read one numeric query param, or raise 400 rather than 500."""
+    raw = request.query_params.get(name)
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        raise serializers.ValidationError({name: "Must be a number."}) from None
+
+
+def _distance_km(lat, lng):
+    """Straight-line km from (lat, lng), as an equirectangular approximation.
+
+    Good to a few metres over a city, needs no PostGIS, and keeps distance in
+    SQL so it can be ordered and paginated. Longitude is scaled by cos(lat)
+    because a degree of longitude narrows towards the poles; skipping that
+    makes everything east-west of the patient look ~12% further away in
+    Hyderabad.
+    """
+    lng_scale = math.cos(math.radians(lat))
+    return ExpressionWrapper(
+        111.32
+        * Sqrt(
+            Power(Cast("latitude", FloatField()) - lat, 2)
+            + Power((Cast("longitude", FloatField()) - lng) * lng_scale, 2),
+        ),
+        output_field=FloatField(),
+    )
+
+
+class DiagnosticCentreSerializer(serializers.ModelSerializer):
+    """A diagnostic centre as the patient app lists it.
+
+    `Provider` is one table for doctors, chemists and labs, and most of it is
+    none of a patient's business — bank details, commission, the POC's phone.
+    This is the narrow public face of a lab row, which is why it is here and
+    not an extension of `AdminProviderSerializer`.
+    """
+
+    test_count = serializers.IntegerField(read_only=True, default=0)
+    max_discount_percent = serializers.SerializerMethodField()
+    distance_km = serializers.SerializerMethodField()
+    is_verified = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Provider
+        fields = (
+            "id",
+            "name",
+            "specialty",
+            "description",
+            "logo_url",
+            "city",
+            "location",
+            "address_line1",
+            "address_line2",
+            "pincode",
+            "map_url",
+            "latitude",
+            "longitude",
+            "distance_km",
+            "rating_avg",
+            "review_count",
+            "is_online",
+            "test_count",
+            "max_discount_percent",
+            "is_verified",
+        )
+
+    def get_max_discount_percent(self, obj) -> int | None:
+        """The deepest discount any of this centre's tests actually carries.
+
+        None rather than 0 when nothing is discounted: the offer badge should
+        disappear, not read "Upto 0% off". Two of the three live centres have
+        no MRP spread at all.
+        """
+        value = getattr(obj, "max_discount", None)
+        return int(value) if value else None
+
+    def get_distance_km(self, obj) -> float | None:
+        value = getattr(obj, "distance", None)
+        return round(value, 1) if value is not None else None
+
+    def get_is_verified(self, obj) -> bool:
+        return obj.onboarding_status == OnboardingStatus.APPROVED
+
+
+class DiagnosticCentreViewSet(viewsets.ReadOnlyModelViewSet):
+    """Public list + detail of the diagnostic centres a patient can book at.
+
+    Read-only on purpose: a centre is edited through the admin portal's
+    provider endpoints, which already own validation for phones, commission
+    and onboarding status. The tests a centre runs are not embedded — they are
+    paginated and filtered in their own right at
+    `/api/healthcare/diagnostic-tests/?provider=<id>`.
+
+    `?lat=&lng=` turns on `distance_km` and the `distance` ordering;
+    `?within_km=` and `?min_rating=` are the list's filter chips.
+    """
+
+    serializer_class = DiagnosticCentreSerializer
+    permission_classes = [ReadOnlyOrAdmin]
+    pagination_class = GenericPaginationClass
+    filterset_fields = ["city"]
+    search_fields = ["name", "location", "city", "specialty"]
+    ordering_fields = [
+        "name",
+        "rating_avg",
+        "review_count",
+        "test_count",
+        "max_discount",
+        "distance",
+    ]
+    ordering = ["-rating_avg", "name"]
+
+    def get_queryset(self):
+        qs = Provider.objects.filter(
+            provider_type__in=DIAGNOSTIC_PROVIDER_TYPES,
+            onboarding_status=OnboardingStatus.APPROVED,
+        ).annotate(
+            test_count=Count(
+                "diagnostic_tests",
+                filter=Q(diagnostic_tests__is_active=True),
+                distinct=True,
+            ),
+            max_discount=Max(
+                _TEST_DISCOUNT,
+                filter=Q(
+                    diagnostic_tests__is_active=True,
+                    diagnostic_tests__mrp__gt=0,
+                ),
+            ),
+        )
+        qs = self._annotate_distance(qs)
+        min_rating = _float_param(self.request, "min_rating")
+        if min_rating is not None:
+            qs = qs.filter(rating_avg__gte=min_rating)
+        within_km = _float_param(self.request, "within_km")
+        if within_km is not None:
+            # A centre with no coordinates is unknown-distance, not nearby:
+            # `distance__lte` already drops its NULL, which is what we want.
+            qs = qs.filter(distance__lte=within_km)
+        return qs
+
+    def _annotate_distance(self, qs):
+        """Always annotate `distance`, null when there is nothing to measure.
+
+        Annotating it conditionally would make `?ordering=distance` a 500 for
+        every client that forgot to send coordinates.
+        """
+        lat = _float_param(self.request, "lat")
+        lng = _float_param(self.request, "lng")
+        if lat is None or lng is None:
+            return qs.annotate(distance=Value(None, output_field=FloatField()))
+        return qs.annotate(distance=_distance_km(lat, lng))
 
 
 class DiagnosticPackageViewSet(viewsets.ModelViewSet):

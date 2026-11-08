@@ -490,6 +490,10 @@ class DiagnosticTest(BaseModel):
         null=True,
         blank=True,
     )
+    # Whether a technician will collect the sample at the patient's address.
+    # A flag rather than a `test_kind`: a blood test is still a lab test when
+    # the blood is drawn at home, and the test row has to say both.
+    home_sample_available = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     test_kind = models.CharField(
         max_length=20,

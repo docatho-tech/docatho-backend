@@ -210,6 +210,10 @@ class AdminProviderSerializer(serializers.ModelSerializer):
             "address_line2",
             "pincode",
             "map_url",
+            # Editable here because the patient app's "2.3km away" has no
+            # other source: the admin pastes the coordinates off the map pin.
+            "latitude",
+            "longitude",
             "poc_name",
             "poc_phone",
             "rating_avg",

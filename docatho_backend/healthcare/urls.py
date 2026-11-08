@@ -11,6 +11,11 @@ router.register(
     "diagnostic-tests", views.DiagnosticTestViewSet, basename="diagnostic-test"
 )
 router.register(
+    "diagnostic-centres",
+    views.DiagnosticCentreViewSet,
+    basename="diagnostic-centre",
+)
+router.register(
     "diagnostic-packages", views.DiagnosticPackageViewSet, basename="diagnostic-package"
 )
 router.register(

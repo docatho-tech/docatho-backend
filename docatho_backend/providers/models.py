@@ -50,6 +50,22 @@ class Provider(BaseModel):
     address_line2 = models.CharField(max_length=255, blank=True, default="")
     pincode = models.CharField(max_length=12, blank=True, default="")
     map_url = models.CharField(max_length=500, blank=True, default="")
+    # Where the partner actually is, so a list can say "2.3km away". Same
+    # precision as `DoctorProfile.clinic_latitude`, which holds the clinic's
+    # position for the same reason. Null means unknown, not (0, 0) — a centre
+    # with no coordinates sorts last by distance rather than off Africa.
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
 
     # Point of contact: who the admin rings about this partner. Distinct from
     # `user`, which is the login the partner signs in with.
