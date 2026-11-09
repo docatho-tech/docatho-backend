@@ -16,6 +16,13 @@ portal, because its provider form has no inputs for the new fields yet.
 Dry run by default: it prints the PATCH it would send, field by field, and
 changes nothing.
 
+It then does the same job for the tests' turnaround. ``turnaround`` was missing
+from ``DiagnosticTestSerializer`` when the rate cards were imported, so
+HealthMark's report promise went into ``description`` as prose ("Report by 11:00
+am same day.") on 118 rows. That prose is moved into the field the app reads, and
+the description it came from is cleared, because the two would otherwise say the
+same thing twice on every test row.
+
 Deliberately NOT imported from Maps:
 
 * **Google's rating and review count.** ``rating_avg``/``review_count`` are
@@ -30,6 +37,7 @@ Deliberately NOT imported from Maps:
 """
 
 import argparse
+import re
 import sys
 
 import requests
@@ -127,6 +135,54 @@ def plan_for(row: dict, wanted: dict) -> tuple[dict, list[str]]:
     return patch, kept
 
 
+# The rate-card importer had nowhere to put the lab's report promise, so it
+# wrote it as a sentence into `description`. Every one of them reads "Report by
+# <time> <same day|next day|N days later>." — anything else in a description is
+# a real description and is left alone.
+TAT_PROSE = re.compile(r"^Report by .+\.?$")
+
+
+def fetch_tests(host: str, headers: dict) -> list[dict]:
+    """Every diagnostic test on the host, including inactive ones."""
+    rows: list[dict] = []
+    url = f"{host}/api/healthcare/diagnostic-tests/"
+    params: dict | None = {"page_size": 100}
+    while url:
+        response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+        if response.status_code != 200:
+            sys.exit(f"tests failed [{response.status_code}]: {response.text[:300]}")
+        payload = response.json()
+        rows.extend(payload.get("results", payload))
+        url = payload.get("next") if isinstance(payload, dict) else None
+        params = None
+    return rows
+
+
+def plan_turnaround(row: dict) -> dict:
+    """The PATCH that moves a test's report promise out of its description."""
+    if row.get("turnaround") not in EMPTY:
+        return {}
+    description = (row.get("description") or "").strip()
+    if not TAT_PROSE.match(description) or len(description) > 40:
+        return {}
+    return {"turnaround": description, "description": ""}
+
+
+def parse_ids(text: str) -> list[int]:
+    """`246-255,301` → the ids in it. Ranges are inclusive."""
+    ids: list[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part.lstrip("-"):
+            start, _, end = part.partition("-")
+            ids.extend(range(int(start), int(end) + 1))
+        else:
+            ids.append(int(part))
+    return ids
+
+
 def self_check() -> None:
     """`--self-check`: the fill-empty-but-never-overwrite rule, asserted."""
     row = {
@@ -159,6 +215,29 @@ def self_check() -> None:
         {"phone": "+919853855980"},
     )
     assert forced == {"phone": "+919853855980"}, forced  # FORCE beats non-empty
+
+    moved = plan_turnaround(
+        {"turnaround": "", "description": "Report by 11:00 am same day."}
+    )
+    assert moved == {
+        "turnaround": "Report by 11:00 am same day.",
+        "description": "",
+    }, moved
+    # A turnaround already on the row wins — it was typed, the prose was guessed.
+    assert not plan_turnaround(
+        {"turnaround": "Same day", "description": "Report by 2:00 pm same day."}
+    )
+    # A real description is a description, not a report promise.
+    assert not plan_turnaround(
+        {"turnaround": "", "description": "Measures thyroid-stimulating hormone."}
+    )
+    # Longer than the column: moving it would raise a 400 on PATCH.
+    assert not plan_turnaround(
+        {"turnaround": "", "description": "Report by 11:00 am " + "x" * 40}
+    )
+
+    assert parse_ids("246-255") == list(range(246, 256))
+    assert parse_ids("246-248, 301,302") == [246, 247, 248, 301, 302]
     print("self-check ok")
 
 
@@ -174,6 +253,18 @@ def main() -> None:
         "--apply",
         action="store_true",
         help="actually PATCH; without it the script only prints what it would do",
+    )
+    parser.add_argument(
+        "--retire",
+        default="",
+        metavar="246-255",
+        help=(
+            "provider ids to take out of the directory by setting "
+            "onboarding_status=rejected — for the demo fixtures that went public. "
+            "Ids are explicit on purpose: there is no reliable way to tell a "
+            "generated partner from a real one, so nothing is guessed. A row with "
+            "active tests is refused."
+        ),
     )
     args = parser.parse_args()
     host = args.host.rstrip("/")
@@ -224,6 +315,76 @@ def main() -> None:
         print("Approved centres this script has no Maps data for:")
         for name in untouched:
             print(f"  {name}")
+        print()
+
+    tests = fetch_tests(host, headers)
+    todo = [(row, plan_turnaround(row)) for row in tests]
+    todo = [(row, patch) for row, patch in todo if patch]
+    print(f"{len(tests)} tests on {host}, {len(todo)} with a turnaround to move")
+    counts: dict[str, int] = {}
+    for _, patch in todo:
+        counts[patch["turnaround"]] = counts.get(patch["turnaround"], 0) + 1
+    for prose, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:4}  {prose}")
+    if todo and not args.apply:
+        print("  (dry run)")
+    elif todo:
+        failed = 0
+        for row, patch in todo:
+            response = requests.patch(
+                f"{host}/api/healthcare/diagnostic-tests/{row['id']}/",
+                headers=headers,
+                json=patch,
+                timeout=TIMEOUT,
+            )
+            if response.status_code != 200:
+                failed += 1
+                print(
+                    f"  FAILED {row['id']} {row['name'][:40]} "
+                    f"[{response.status_code}] {response.text[:200]}"
+                )
+        print(f"  {len(todo) - failed} moved, {failed} failed")
+
+    if args.retire:
+        retire(host, headers, parse_ids(args.retire), tests, apply=args.apply)
+
+
+def retire(host: str, headers: dict, ids: list[int], tests: list[dict], apply: bool):
+    """Take demo providers out of the directory, one explicit id at a time."""
+    stocked: dict[int, int] = {}
+    for test in tests:
+        if test.get("provider") and test.get("is_active"):
+            stocked[test["provider"]] = stocked.get(test["provider"], 0) + 1
+
+    print(f"\nRetiring {len(ids)} providers")
+    for provider_id in ids:
+        url = f"{host}/api/providers/admin/{provider_id}/"
+        response = requests.get(url, headers=headers, timeout=TIMEOUT)
+        if response.status_code != 200:
+            print(f"  {provider_id}: not found [{response.status_code}]")
+            continue
+        row = response.json()
+        label = f"{provider_id} {row.get('name')} ({row.get('provider_type')})"
+        if row.get("onboarding_status") != "approved":
+            print(f"  {label}: already {row.get('onboarding_status')}, left alone")
+            continue
+        # A partner with a live catalogue is somebody's business, not a fixture.
+        if stocked.get(provider_id):
+            print(f"  {label}: REFUSED, has {stocked[provider_id]} active tests")
+            continue
+        if not apply:
+            print(f"  {label}: would set onboarding_status=rejected (dry run)")
+            continue
+        patched = requests.patch(
+            url,
+            headers=headers,
+            json={"onboarding_status": "rejected"},
+            timeout=TIMEOUT,
+        )
+        if patched.status_code != 200:
+            print(f"  {label}: FAILED [{patched.status_code}] {patched.text[:200]}")
+            continue
+        print(f"  {label}: retired")
 
 
 if __name__ == "__main__":

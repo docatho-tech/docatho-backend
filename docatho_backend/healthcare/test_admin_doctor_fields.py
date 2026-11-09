@@ -96,6 +96,42 @@ def test_clinic_images_and_coordinates_are_writable(admin_client, doctor):
     assert str(doctor.clinic_latitude) == "21.250000"
 
 
+def test_the_profile_fields_the_dashboard_form_sends_round_trip(admin_client, doctor):
+    """Every field in `DoctorPayload` that reads back empty on prod.
+
+    The client reported biography, languages, fees and consultation modes as
+    blank for every doctor. This pins the write path: if they are blank, they
+    were never entered — a doctor created through `/partners` only ever gets
+    name, phone, specialty and clinic, so the rest is empty until someone
+    opens the edit form.
+    """
+    response = admin_client.patch(
+        url_for(doctor),
+        {
+            "biography": "Twelve years in interventional cardiology.",
+            "qualifications_ug": ["MBBS"],
+            "qualifications_pg": ["MD"],
+            "languages": ["English", "Hindi"],
+            "consultation_modes": ["online", "in_clinic"],
+            "experience_years": 12,
+            "fee_online": "400.00",
+            "fee_in_clinic": "600.00",
+            "fee_home_visit": "1200.00",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    doctor.refresh_from_db()
+    assert doctor.biography.startswith("Twelve years")
+    assert doctor.languages == ["English", "Hindi"]
+    assert doctor.consultation_modes == ["online", "in_clinic"]
+    assert doctor.experience_years == 12
+    assert str(doctor.fee_online) == "400.00"
+    # `qualifications` is derived from the two levels on save, not sent.
+    assert doctor.qualifications == ["MBBS", "MD"]
+
+
 def test_the_verification_documents_are_readable(admin_client, doctor):
     """Approve/Reject is a judgement on these; they were on no serializer."""
     response = admin_client.get(url_for(doctor))

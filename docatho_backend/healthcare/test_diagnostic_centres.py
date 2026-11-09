@@ -19,10 +19,19 @@ KUKATPALLY = (17.4849, 78.3917)
 AMEERPET = (17.4374, 78.4487)
 
 
-def centre(**kwargs):
+def centre(tests=1, **kwargs):
+    """An approved diagnostic partner that the list will actually return.
+
+    It gets one test by default because the list hides centres with none, so a
+    bare `centre()` would be invisible to every assertion here. `tests=0` for
+    the cases that make their own.
+    """
     kwargs.setdefault("provider_type", "Diagnostic Center")
     kwargs.setdefault("onboarding_status", OnboardingStatus.APPROVED)
-    return ProviderFactory(**kwargs)
+    provider = ProviderFactory(**kwargs)
+    for _ in range(tests):
+        DiagnosticTestFactory(provider=provider, price=Decimal("500.00"), mrp=None)
+    return provider
 
 
 def results(response):
@@ -45,15 +54,14 @@ def test_only_approved_diagnostic_partners_are_listed():
 
 
 def test_discount_badge_reflects_the_centres_own_tests():
-    discounted = centre(name="True Diagnostics")
+    discounted = centre(name="True Diagnostics", tests=0)
     DiagnosticTestFactory(
         provider=discounted,
         price=Decimal("880.00"),
         mrp=Decimal("1000.00"),
     )
     DiagnosticTestFactory(provider=discounted, price=Decimal("500.00"), mrp=None)
-    flat = centre(name="HealthMark")
-    DiagnosticTestFactory(provider=flat, price=Decimal("500.00"), mrp=None)
+    flat = centre(name="HealthMark", tests=1)
 
     rows = {row["id"]: row for row in results(APIClient().get(URL))}
 
@@ -104,6 +112,23 @@ def test_rating_filter_and_bad_numbers():
     assert APIClient().get(f"{URL}?min_rating=four").status_code == 400
 
 
+def test_a_centre_with_no_tests_is_not_listed_but_is_still_reachable():
+    """Four of prod's eight approved diagnostic partners have no tests."""
+    stocked = centre(name="True Diagnostics")
+    empty = centre(name="Jass Diagnostics", tests=0)
+    inactive = centre(name="Triveni Diagnostics", tests=0)
+    DiagnosticTestFactory(provider=inactive, is_active=False)
+
+    rows = results(APIClient().get(URL))
+
+    # An empty centre on the list is a card that leads nowhere to book.
+    assert [row["id"] for row in rows] == [stocked.id]
+    # Detail still answers: an old booking's centre must not 404 because its
+    # last test was switched off.
+    assert APIClient().get(f"{URL}{empty.id}/").status_code == 200
+    assert APIClient().get(f"{URL}{inactive.id}/").status_code == 200
+
+
 def test_detail_exposes_the_centre_but_not_its_payout_details():
     live = centre(name="True Diagnostics", bank_ifsc="HDFC0000123")
 
@@ -116,7 +141,7 @@ def test_detail_exposes_the_centre_but_not_its_payout_details():
 
 
 def test_tests_expose_turnaround_home_sample_and_code():
-    lab = centre(name="HealthMark")
+    lab = centre(name="HealthMark", tests=0)
     DiagnosticTestFactory(
         provider=lab,
         code="LAB-CT",

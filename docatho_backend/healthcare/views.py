@@ -1643,6 +1643,16 @@ class DiagnosticCentreViewSet(viewsets.ReadOnlyModelViewSet):
                 ),
             ),
         )
+        # A centre with no active tests is a dead end: the card lists it, the
+        # patient taps it, and the detail screen has nothing to book. Four of
+        # the eight approved diagnostic partners are in that state, so this is
+        # the list's own correctness, not a defensive filter.
+        #
+        # List only. On detail it would 404 the centre of an existing booking
+        # the moment its last test went inactive, which is a broken bookings
+        # screen rather than a tidy list.
+        if self.action == "list":
+            qs = qs.filter(test_count__gt=0)
         qs = self._annotate_distance(qs)
         min_rating = _float_param(self.request, "min_rating")
         if min_rating is not None:
