@@ -83,3 +83,53 @@ def test_admin_medicine_viewset_requires_staff(auth_client):
     client = auth_client(UserFactory())
     resp = client.get("/api/medicines/list/admin/")
     assert resp.status_code == 403
+
+
+def _names(resp):
+    results = resp.data["results"] if "results" in resp.data else resp.data
+    return [m["name"] for m in results]
+
+
+def test_price_range_and_sort_are_numeric_not_lexicographic(api_client):
+    """`price` is a Decimal, so 9 sorts below 11 rather than above it.
+
+    The filter screen's price range and the "Low to High" sort both lean on
+    this; a CharField price would pass a naive "is it sorted" check and still
+    order 100 before 9.
+    """
+    MedicineFactory(name="Cheap", price="9.00")
+    MedicineFactory(name="Mid", price="11.00")
+    MedicineFactory(name="Dear", price="100.00")
+
+    assert _names(api_client.get("/api/medicines/?ordering=price")) == [
+        "Cheap",
+        "Mid",
+        "Dear",
+    ]
+    assert _names(api_client.get("/api/medicines/?ordering=-price")) == [
+        "Dear",
+        "Mid",
+        "Cheap",
+    ]
+
+    ranged = _names(api_client.get("/api/medicines/?price_min=10&price_max=50"))
+    assert ranged == ["Mid"]
+
+
+def test_in_stock_filter_splits_on_zero(api_client):
+    MedicineFactory(name="Stocked", stock=4)
+    MedicineFactory(name="Empty", stock=0)
+
+    assert _names(api_client.get("/api/medicines/?in_stock=true")) == ["Stocked"]
+    assert _names(api_client.get("/api/medicines/?in_stock=false")) == ["Empty"]
+    # Absent means "do not filter", not "false".
+    assert sorted(_names(api_client.get("/api/medicines/"))) == ["Empty", "Stocked"]
+
+
+def test_schedule_in_accepts_several_schedules(api_client):
+    MedicineFactory(name="Hdrug", schedule=DrugSchedule.H)
+    MedicineFactory(name="H1drug", schedule=DrugSchedule.H1)
+    MedicineFactory(name="Otc", schedule=DrugSchedule.OTC)
+
+    got = sorted(_names(api_client.get("/api/medicines/?schedule_in=H,H1")))
+    assert got == ["H1drug", "Hdrug"]

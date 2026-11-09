@@ -3,6 +3,7 @@ from rest_framework.pagination import PageNumberPagination
 
 from docatho_backend.masters.permissions import IsAdmin
 from docatho_backend.masters.permissions import ReadOnlyOrAdmin
+from docatho_backend.medicines.filters import MedicineFilter
 from docatho_backend.medicines.models import Category
 from docatho_backend.medicines.models import Medicine
 from docatho_backend.medicines.serializers import CategorySerializer
@@ -32,13 +33,7 @@ class MedicineViewset(viewsets.ModelViewSet):
     pagination_class = GenericPaginationClass
     queryset = Medicine.objects.prefetch_related("category").all()
     permission_classes = [ReadOnlyOrAdmin]
-    filterset_fields = [
-        "is_active",
-        "name",
-        "category",
-        "schedule",
-        "is_prescription_required",
-    ]
+    filterset_class = MedicineFilter
     search_fields = ["name", "brand", "manufacturer", "description"]
     ordering_fields = ["created_at", "updated_at", "name", "price", "stock"]
 
