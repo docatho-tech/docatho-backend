@@ -4,6 +4,8 @@ from docatho_backend.users.views import RegisterView
 from docatho_backend.users.views import SendOTPApiView
 from docatho_backend.users.views import VerifyOtpAPIView
 
+from .places import PlaceAutocompleteView
+from .places import PlaceDetailsView
 from .views import AdminLoginView
 from .views import CreateAddressAPIView
 from .views import DashboardView
@@ -28,6 +30,12 @@ urlpatterns = [
     path("update-profile/", UpdateProfileAPIView.as_view(), name="update-profile"),
     path("addresses/", CreateAddressAPIView.as_view(), name="create-address"),
     path("addresses/<int:pk>/", UpdateAddressAPIView.as_view(), name="update-address"),
+    path(
+        "places/autocomplete/",
+        PlaceAutocompleteView.as_view(),
+        name="place-autocomplete",
+    ),
+    path("places/details/", PlaceDetailsView.as_view(), name="place-details"),
     path("admin-login/", AdminLoginView.as_view(), name="admin-login"),
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
     path("profile/", UserProfileView.as_view(), name="profile"),

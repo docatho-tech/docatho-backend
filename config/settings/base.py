@@ -68,6 +68,11 @@ HMS_DOCTOR_ROLE = env("HMS_DOCTOR_ROLE", default="host")
 # (https://<subdomain>.app.100ms.live/meeting/<room-code>) for E2E and support.
 HMS_SUBDOMAIN = env("HMS_SUBDOMAIN", default="")
 
+# Google Places, for the delivery-address search. Server-side on purpose — see
+# docatho_backend/users/places.py. Restrict the key to this box's IP and to the
+# Places API; unset, address search falls back to the phone's own geocoder.
+GOOGLE_PLACES_API_KEY = env("GOOGLE_PLACES_API_KEY", default="")
+
 # Local time zone. Choices are
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
 # though not all of them may be available with every OS.
@@ -407,6 +412,10 @@ REST_FRAMEWORK = {
     # endpoints: send-otp / verify-otp / register / admin-login / dashboard).
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Only the Places proxy is throttled, and only because every call through
+    # it costs money at Google. A patient typing an address makes a handful of
+    # calls a minute; this stops one account from running up the bill.
+    "DEFAULT_THROTTLE_RATES": {"places": "60/min"},
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
