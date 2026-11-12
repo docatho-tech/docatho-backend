@@ -71,6 +71,8 @@ class AddressDetailSerializer(serializers.ModelSerializer):
             "state",
             "postal_code",
             "country",
+            "latitude",
+            "longitude",
             "is_default",
         )
 

@@ -160,6 +160,21 @@ class Address(BaseModel):
     state = models.CharField(max_length=100)
     postal_code = models.CharField(max_length=20)
     country = models.CharField(max_length=100)
+    # Where the address actually is. Same precision as `Provider.latitude` so a
+    # delivery address and a centre can be compared directly. Null means the
+    # patient typed the address by hand and never dropped a pin — not (0, 0).
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
     is_default = models.BooleanField(default=False)
 
     class Meta(BaseModel.Meta):

@@ -66,3 +66,36 @@ def test_user_address_property_prefers_default():
     AddressFactory(user=user, is_default=False)
     default = AddressFactory(user=user, is_default=True)
     assert user.address.id == default.id
+
+
+def test_coordinates_round_trip_and_stay_optional(auth_client):
+    """A pin saves and reads back; an address without one keeps null, not 0."""
+    client = auth_client(UserFactory())
+
+    pinned = client.post(
+        "/api/addresses/",
+        _payload(latitude="21.262035", longitude="81.675567"),
+        format="json",
+    )
+    assert pinned.status_code == 201
+    assert pinned.data["latitude"] == "21.262035"
+    assert pinned.data["longitude"] == "81.675567"
+
+    # The app sends null for an address typed by hand — "" would be a 400.
+    typed = client.post(
+        "/api/addresses/",
+        _payload(latitude=None, longitude=None),
+        format="json",
+    )
+    assert typed.status_code == 201
+    assert typed.data["latitude"] is None
+    assert Address.objects.get(pk=typed.data["id"]).latitude is None
+
+    # And a pin can be dropped on an address that was saved without one.
+    moved = client.patch(
+        f"/api/addresses/{typed.data['id']}/",
+        {"latitude": "21.239830", "longitude": "81.667994"},
+        format="json",
+    )
+    assert moved.status_code == 200
+    assert moved.data["latitude"] == "21.239830"
