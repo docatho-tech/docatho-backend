@@ -101,6 +101,39 @@ _PHI_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 MAX_MESSAGE_CHARS = 1000
 
+# A voice note or a document the patient attaches goes to the model inline. The
+# list is deliberately short: these are the types Gemini reads, and anything
+# else is refused at the view rather than stored and silently ignored.
+ALLOWED_AUDIO_MIME = {
+    "audio/m4a",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/aac",
+    "audio/wav",
+    "audio/webm",
+    "audio/ogg",
+}
+ALLOWED_DOC_MIME = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+}
+ALLOWED_ATTACHMENT_MIME = ALLOWED_AUDIO_MIME | ALLOWED_DOC_MIME
+# 10 MB is about 10 minutes of m4a voice or a long scanned report, and it is
+# also roughly where inline base64 stops being reasonable to POST.
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+# What an attachment turns into when no model can read it. Saying so is the
+# point — a patient who records a symptom and gets a generic text answer would
+# otherwise believe the recording was heard.
+ATTACHMENT_UNREAD_REPLY = (
+    "I couldn't listen to or read that attachment just now. It is saved to this "
+    "chat, so you can try again in a moment — or describe the same thing in a "
+    "message and I'll help straight away."
+)
+
 
 def redact_phi(text: str) -> str:
     """Remove direct identifiers from text that is about to leave our server."""
@@ -211,16 +244,31 @@ class HealthcareAIService:
         self.openai_key = getattr(settings, "OPENAI_API_KEY", "") or ""
         self.gemini_key = getattr(settings, "GEMINI_API_KEY", "") or ""
 
-    def chat(self, message: str, history: list[dict[str, str]] | None = None) -> AIResponse:
+    def chat(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None = None,
+        attachment: dict | None = None,
+    ) -> AIResponse:
+        """Answer one turn.
+
+        `attachment` is an optional ``{"mime": str, "data": bytes}`` — a voice
+        note or a document the patient sent. It is handed to the model inline;
+        only Gemini can read it, so an attachment-only turn says so plainly
+        rather than falling through to a text-shaped canned answer.
+        """
         text = (message or "").strip()
-        if not text:
+        if not text and not attachment:
             return AIResponse(
                 content="Please describe your symptoms or health question.",
                 metadata={"intent": "empty"},
                 source="fallback",
             )
 
-        # Before any model call: an emergency gets the fixed answer.
+        # Before any model call: an emergency gets the fixed answer. Note this
+        # reads the typed text only — speech inside a voice note is not
+        # screened, because nothing here can transcribe it before the model
+        # does. See the caveat in the API docs.
         if is_emergency(text):
             return AIResponse(
                 content=EMERGENCY_REPLY,
@@ -234,6 +282,37 @@ class HealthcareAIService:
             for h in (history or [])
             if h.get("role") in ("user", "assistant")
         ]
+
+        if attachment:
+            # Only the Gemini path can take a file. Rather than quietly answer
+            # the (often empty) caption, an unreadable attachment is told about.
+            if not self.gemini_key:
+                return AIResponse(
+                    content=ATTACHMENT_UNREAD_REPLY,
+                    metadata={"intent": "attachment", "guardrail": "no_model"},
+                    source="fallback",
+                )
+            try:
+                content = self._gemini_chat(safe_text, safe_history, attachment)
+            except Exception:
+                logger.exception("gemini attachment turn failed")
+                return AIResponse(
+                    content=ATTACHMENT_UNREAD_REPLY,
+                    metadata={"intent": "attachment", "guardrail": "model_error"},
+                    source="fallback",
+                )
+            if is_unsafe_output(content):
+                logger.warning("gemini attachment reply blocked by output guardrail")
+                return AIResponse(
+                    content=f"{UNSAFE_OUTPUT_REPLY}\n\n{DISCLAIMER}",
+                    metadata={"intent": "blocked", "guardrail": "unsafe_output"},
+                    source="guardrail",
+                )
+            return AIResponse(
+                content=content,
+                metadata={"intent": "attachment"},
+                source="gemini",
+            )
 
         for provider, call in (
             ("gemini", self._gemini_chat if self.gemini_key else None),
@@ -329,8 +408,15 @@ class HealthcareAIService:
                     results.append({"name": chunk, "dosage": ""})
         return results[:20]
 
-    def _gemini_chat(self, message: str, history: list[dict[str, str]]) -> str:
+    def _gemini_chat(
+        self,
+        message: str,
+        history: list[dict[str, str]],
+        attachment: dict | None = None,
+    ) -> str:
         """Call Gemini over REST. No SDK — one POST, one JSON answer."""
+        import base64
+
         import requests
 
         contents = [
@@ -340,7 +426,35 @@ class HealthcareAIService:
             }
             for item in history[-6:]
         ]
-        contents.append({"role": "user", "parts": [{"text": message}]})
+
+        parts: list[dict] = []
+        if attachment:
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": attachment["mime"],
+                        "data": base64.b64encode(attachment["data"]).decode(),
+                    },
+                },
+            )
+            # Without this the model tends to read a voice note back verbatim
+            # or summarise a report as a conclusion, which the output guardrail
+            # would then have to throw away.
+            parts.append(
+                {
+                    "text": message
+                    or (
+                        "The patient sent this. If it is a voice note, answer what "
+                        "they asked in it. If it is a document or photo, say in "
+                        "plain language what kind of document it is and what it "
+                        "generally covers — do not interpret results, give a "
+                        "diagnosis, or mention any medicine or dose."
+                    ),
+                },
+            )
+        else:
+            parts.append({"text": message})
+        contents.append({"role": "user", "parts": parts})
 
         response = requests.post(
             GEMINI_URL.format(model=getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash")),

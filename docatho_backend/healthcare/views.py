@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import math
 from decimal import Decimal
 
@@ -27,10 +29,16 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.generics import ListAPIView
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
+from rest_framework.parsers import FormParser
+from rest_framework.parsers import JSONParser
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from docatho_backend.healthcare.ai_service import ALLOWED_ATTACHMENT_MIME
+from docatho_backend.healthcare.ai_service import ALLOWED_AUDIO_MIME
+from docatho_backend.healthcare.ai_service import MAX_ATTACHMENT_BYTES
 from docatho_backend.healthcare.ai_service import MAX_MESSAGE_CHARS
 from docatho_backend.healthcare.ai_service import HealthcareAIService
 from docatho_backend.healthcare.appointment_payments import confirm_appointment_payment
@@ -1818,25 +1826,73 @@ class AIChatAPIView(APIView):
     # a scripted client could both run up a bill and spam a patient's history.
     throttle_classes = [AIChatBurstThrottle, AIChatDailyThrottle]
 
+    # A voice note or a document arrives as multipart; a plain text turn is
+    # still JSON, so both parsers stay on.
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     def post(self, request):
         message = (request.data.get("message") or "").strip()[:MAX_MESSAGE_CHARS]
         session_id = request.data.get("session_id")
         history = request.data.get("history", [])
-        if not message:
+        if isinstance(history, str):
+            # Multipart cannot carry a list, so the client sends JSON text.
+            try:
+                history = json.loads(history)
+            except ValueError:
+                history = []
+        upload = request.FILES.get("attachment")
+
+        if not message and not upload:
             return Response(
-                {"detail": "message is required"},
+                {"detail": "message or attachment is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        attachment_payload = None
+        if upload:
+            mime = (upload.content_type or "").split(";")[0].strip().lower()
+            if mime not in ALLOWED_ATTACHMENT_MIME:
+                return Response(
+                    {"detail": "Only voice notes, PDFs and images can be attached."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if upload.size > MAX_ATTACHMENT_BYTES:
+                return Response(
+                    {"detail": "Attachments are limited to 10 MB."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Read once for the model; the same file object is saved below, so
+            # rewind rather than reading it twice off the stream.
+            data = upload.read()
+            upload.seek(0)
+            attachment_payload = {"mime": mime, "data": data}
+
         if session_id:
             session = get_object_or_404(AIChatSession, pk=session_id, user=request.user)
         else:
-            session = AIChatSession.objects.create(
-                user=request.user,
-                title=(message[:50] if message else "Health chat"),
+            if message:
+                title = message[:50]
+            elif upload:
+                title = "Voice note" if mime in ALLOWED_AUDIO_MIME else "Shared a document"
+            else:
+                title = "Health chat"
+            session = AIChatSession.objects.create(user=request.user, title=title)
+
+        user_message = AIChatMessage(session=session, role="user", content=message)
+        if upload:
+            user_message.attachment = upload
+            user_message.attachment_kind = (
+                "audio" if mime in ALLOWED_AUDIO_MIME else "file"
             )
-        AIChatMessage.objects.create(session=session, role="user", content=message)
+            user_message.attachment_name = upload.name[:255]
+            duration = request.data.get("duration_ms")
+            if duration:
+                with contextlib.suppress(TypeError, ValueError):
+                    user_message.metadata = {"duration_ms": int(duration)}
+        user_message.save()
+
         ai = HealthcareAIService()
-        result = ai.chat(message, history)
+        result = ai.chat(message, history, attachment=attachment_payload)
         AIChatMessage.objects.create(
             session=session,
             role="assistant",
@@ -1849,6 +1905,11 @@ class AIChatAPIView(APIView):
                 "reply": result.content,
                 "source": result.source,
                 "metadata": result.metadata,
+                "attachment_url": (
+                    request.build_absolute_uri(user_message.attachment.url)
+                    if user_message.attachment
+                    else None
+                ),
             },
         )
 
@@ -1905,6 +1966,14 @@ class AIChatSessionDetailAPIView(APIView):
                         "role": m.role,
                         "content": m.content,
                         "created_at": m.created_at,
+                        "attachment_url": (
+                            request.build_absolute_uri(m.attachment.url)
+                            if m.attachment
+                            else None
+                        ),
+                        "attachment_kind": m.attachment_kind,
+                        "attachment_name": m.attachment_name,
+                        "duration_ms": (m.metadata or {}).get("duration_ms"),
                     }
                     for m in session.messages.all()
                 ],
