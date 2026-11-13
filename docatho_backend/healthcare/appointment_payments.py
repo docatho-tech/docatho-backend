@@ -59,10 +59,12 @@ def confirm_appointment_payment(
     raw_response: dict[str, Any] | None = None,
 ) -> AppointmentPaymentTransaction:
     client = RazorpayClient()
-    if razorpay_signature:
-        ok = client.verify_payment_signature(razorpay_order_id, razorpay_payment_id, razorpay_signature)
-        if not ok:
-            raise ValueError("Invalid signature")
+    # Unconditional: a missing signature used to skip verification entirely, so
+    # a patient could mark their own consultation paid by posting the order id
+    # from /checkout/ with no signature at all.
+    ok = client.verify_payment_signature(razorpay_order_id, razorpay_payment_id, razorpay_signature or "")
+    if not ok:
+        raise ValueError("Invalid signature")
 
     tr = (
         AppointmentPaymentTransaction.objects.select_for_update()

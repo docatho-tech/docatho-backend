@@ -109,28 +109,28 @@ class RazorpayClient:
         if tr is None:
             raise ValueError("No Transaction found for given razorpay_order_id")
 
-        if razorpay_signature:
-            ok = self.verify_payment_signature(
-                razorpay_order_id,
-                razorpay_payment_id,
-                razorpay_signature,
+        # Unconditional: an absent signature must fail, never skip the check.
+        ok = self.verify_payment_signature(
+            razorpay_order_id,
+            razorpay_payment_id,
+            razorpay_signature or "",
+        )
+        if not ok:
+            # record failure
+            tr.raw_response = (raw_response or {}) | {"signature_verified": False}
+            tr.succeeded = False
+            tr.razorpay_payment_id = razorpay_payment_id
+            tr.razorpay_signature = razorpay_signature
+            tr.save(
+                update_fields=[
+                    "raw_response",
+                    "succeeded",
+                    "razorpay_payment_id",
+                    "razorpay_signature",
+                    "updated_at",
+                ],
             )
-            if not ok:
-                # record failure
-                tr.raw_response = (raw_response or {}) | {"signature_verified": False}
-                tr.succeeded = False
-                tr.razorpay_payment_id = razorpay_payment_id
-                tr.razorpay_signature = razorpay_signature
-                tr.save(
-                    update_fields=[
-                        "raw_response",
-                        "succeeded",
-                        "razorpay_payment_id",
-                        "razorpay_signature",
-                        "updated_at",
-                    ],
-                )
-                raise ValueError("Invalid signature")
+            raise ValueError("Invalid signature")
 
         # mark success
         tr.razorpay_payment_id = razorpay_payment_id
@@ -196,37 +196,37 @@ class RazorpayClient:
                 tr = Transaction.objects.filter(
                     razorpay_payment_id=rp_payment_id,
                 ).first()
-            # create or update transaction record
-            if tr is None and rp_order_id:
-                # try to attach to order by razorpay order id -> find order
-                order = Order.objects.filter(
-                    order_number=rp_order_id,
-                ).first()  # fallback; normally transaction_order_id stores rp order id
-                tr = Transaction.objects.create(
-                    order=order,
-                    provider="razorpay",
-                    transaction_order_id=rp_order_id,
-                    razorpay_payment_id=rp_payment_id,
-                    amount=(Decimal(amount) / 100) if amount else Decimal("0.00"),
-                    succeeded=(event == "payment.captured"),
-                    raw_response=payment_entity,
-                )
-            elif tr:
+            # No Transaction row means this payment is not a pharmacy order —
+            # appointment checkouts keep their own ledger. Acknowledge it rather
+            # than inventing a Transaction with no Order (the FK is NOT NULL, so
+            # that raised and Razorpay retried the delivery forever).
+            if tr:
                 tr.razorpay_payment_id = rp_payment_id or tr.razorpay_payment_id
                 tr.amount = (Decimal(amount) / 100) if amount else tr.amount
                 tr.raw_response = payment_entity
-                tr.succeeded = event == "payment.captured"
-                if tr.succeeded:
+                if event == "payment.captured":
+                    tr.succeeded = True
                     tr.paid_at = timezone.now()
+                elif event == "payment.failed":
+                    tr.succeeded = False
+                # payment.authorized leaves `succeeded` alone: events can arrive
+                # out of order, and it must not undo a capture already recorded.
                 tr.save()
 
             # update order status
             if tr and tr.order:
+                order = tr.order
+                already_paid = order.payment_status == order.PaymentStatus.PAID
                 if event == "payment.captured":
-                    tr.order.payment_status = tr.order.PaymentStatus.PAID
-                    tr.order.status = tr.order.Status.CONFIRMED
-                elif event == "payment.failed":
-                    tr.order.payment_status = tr.order.PaymentStatus.FAILED
-                tr.order.save(update_fields=["payment_status", "status", "updated_at"])
+                    order.payment_status = order.PaymentStatus.PAID
+                    order.status = order.Status.CONFIRMED
+                    order.save(
+                        update_fields=["payment_status", "status", "updated_at"],
+                    )
+                elif event == "payment.failed" and not already_paid:
+                    # A late failure from an earlier attempt must not unpay an
+                    # order the patient went on to pay for.
+                    order.payment_status = order.PaymentStatus.FAILED
+                    order.save(update_fields=["payment_status", "updated_at"])
 
         return payload

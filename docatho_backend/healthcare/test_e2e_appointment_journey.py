@@ -180,3 +180,39 @@ def test_video_token_blocked_before_payment(auth_client):
         f"/api/healthcare/appointments/{appt.id}/video-token/"
     )
     assert res.status_code == 403
+
+
+@pytest.mark.parametrize("signature", [None, "", "deadbeef"])
+def test_confirm_payment_without_a_valid_signature_does_not_mark_paid(
+    auth_client, settings, signature
+):
+    """A missing signature used to skip verification and hand out a free consult."""
+    settings.RAZORPAY_KEY_SECRET = RAZORPAY_TEST_SECRET
+    patient = UserFactory()
+    doctor = DoctorProfileFactory()
+    client = auth_client(patient)
+    booked = _book_online(client, doctor, timezone.now() + timedelta(days=3))
+    appt_id = booked.data["id"]
+
+    rp_order = mock_razorpay_order(RP_ORDER_ID, Decimal(booked.data["fee"]))
+    with patch_appointment_razorpay(rp_order):
+        assert client.post(
+            f"/api/healthcare/appointments/{appt_id}/checkout/"
+        ).status_code == 200
+
+    body = {
+        "razorpay_order_id": RP_ORDER_ID,
+        "razorpay_payment_id": RP_PAYMENT_ID,
+    }
+    if signature is not None:
+        body["razorpay_signature"] = signature
+
+    res = client.post(
+        f"/api/healthcare/appointments/{appt_id}/confirm-payment/",
+        body,
+        format="json",
+    )
+    assert res.status_code == 400, res.data
+    appt = Appointment.objects.get(pk=appt_id)
+    assert appt.payment_status == AppointmentPaymentStatus.PENDING
+    assert appt.paid_at is None
