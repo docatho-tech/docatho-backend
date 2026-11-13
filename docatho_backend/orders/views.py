@@ -610,6 +610,27 @@ def razorpay_webhook(request):
             {"detail": str(exc)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+    # A declined card / abandoned gateway sheet never comes back through
+    # confirm-payment, so the webhook is the only place the patient can be told
+    # the order did not go through.
+    if payload.get("event") == "payment.failed":
+        entity = (
+            payload.get("payload", {}).get("payment", {}).get("entity", {}) or {}
+        )
+        tr = Transaction.objects.filter(
+            transaction_order_id=entity.get("order_id"),
+        ).select_related("order", "order__user").first()
+        if tr and tr.order:
+            notify(
+                tr.order.user,
+                NotificationType.PAYMENT_FAILED,
+                "Payment failed",
+                f"Your payment for order {tr.order.order_number} did not go "
+                "through. Nothing was charged — you can retry from My Orders.",
+                order=tr.order,
+            )
+
     return Response({"status": "ok", "event": payload.get("event")})
 
 

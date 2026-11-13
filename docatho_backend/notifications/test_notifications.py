@@ -87,3 +87,15 @@ def test_register_device_token(auth_client):
     )
     assert resp2.status_code == 201
     assert resp2.data["id"] == resp.data["id"]
+
+
+def test_signup_notifies_new_user(client):
+    """Registration leaves a welcome notification on the new account."""
+    resp = client.post(
+        "/api/register/",
+        {"phone": "+919000000123", "name": "New Patient"},
+        content_type="application/json",
+    )
+    assert resp.status_code == 201
+    n = Notification.objects.get(notification_type=NotificationType.ACCOUNT_CREATED)
+    assert n.recipient.phone == "+919000000123"

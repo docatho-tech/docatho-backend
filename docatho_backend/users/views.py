@@ -17,6 +17,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from docatho_backend.medicines.models import Category
+from docatho_backend.notifications.models import NotificationType
+from docatho_backend.notifications.services import notify
 from docatho_backend.medicines.serializers import CategorySerializer
 from docatho_backend.orders.paginators import GenericPaginationClass
 from docatho_backend.users.helper import generate_otp
@@ -236,6 +238,13 @@ class RegisterView(APIView):
             )
             user.set_unusable_password()
             user.save()
+
+            notify(
+                user,
+                NotificationType.ACCOUNT_CREATED,
+                "Welcome to Docatho",
+                "Your account is ready. Book doctors, labs and medicines from one place.",
+            )
 
             return Response(
                 {"token": Token.objects.get_or_create(user=user)[0].key},

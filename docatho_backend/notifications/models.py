@@ -14,6 +14,8 @@ class NotificationType(models.TextChoices):
     ORDER_DELIVERED = "order_delivered", _("Order delivered")
     ORDER_CANCELLED = "order_cancelled", _("Order cancelled")
     PAYMENT = "payment", _("Payment update")
+    PAYMENT_FAILED = "payment_failed", _("Payment failed")
+    ACCOUNT_CREATED = "account_created", _("Account created")
     APPOINTMENT_BOOKED = "appointment_booked", _("Appointment booked")
     APPOINTMENT_CONFIRMED = "appointment_confirmed", _("Appointment confirmed")
     APPOINTMENT_REJECTED = "appointment_rejected", _("Appointment rejected")
