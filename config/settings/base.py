@@ -58,6 +58,16 @@ NOTIFICATION_BACKEND = env(
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
 
+# Gemini powers Doc AI when a key is set; it takes precedence over OpenAI, and
+# with neither key the service answers from its local rule table. Server-side
+# only — the key never reaches a client. See healthcare/ai_service.py for the
+# guardrails every model answer passes through.
+GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
+# gemini-3.8-flash is the only model this key's project can call — the 2.5/3.x
+# names list fine but answer 404 "no longer available to new users" on
+# generateContent.
+GEMINI_MODEL = env("GEMINI_MODEL", default="gemini-3.8-flash")
+
 # 100ms video consultations
 HMS_APP_ACCESS_KEY = env("HMS_APP_ACCESS_KEY", default="")
 HMS_APP_SECRET = env("HMS_APP_SECRET", default="")
@@ -415,7 +425,15 @@ REST_FRAMEWORK = {
     # Only the Places proxy is throttled, and only because every call through
     # it costs money at Google. A patient typing an address makes a handful of
     # calls a minute; this stops one account from running up the bill.
-    "DEFAULT_THROTTLE_RATES": {"places": "60/min"},
+    # Only the paid/metered endpoints are throttled. Places costs money at
+    # Google per keystroke-burst; Doc AI costs money per message at Gemini and
+    # is the one endpoint where a loop could also flood a patient with model
+    # output — hence a tight burst limit and a daily cap on top of it.
+    "DEFAULT_THROTTLE_RATES": {
+        "places": "60/min",
+        "ai_chat_burst": "8/min",
+        "ai_chat_day": "60/day",
+    },
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",

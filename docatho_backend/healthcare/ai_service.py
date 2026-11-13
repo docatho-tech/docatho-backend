@@ -23,6 +23,100 @@ DISCLAIMER = (
     "Please consult a qualified doctor for personal advice."
 )
 
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_TIMEOUT_SECONDS = 20
+
+# Hard scope for the model. Everything the assistant is allowed to be is in
+# here — it is the first guardrail, and the output filters below assume it.
+SYSTEM_PROMPT = (
+    "You are Doc AI, the assistant inside the Docatho healthcare app in India.\n"
+    "SCOPE: general health information, explaining symptoms in plain language, "
+    "which kind of specialist to see, and how to use Docatho (booking doctors, "
+    "lab tests, ordering medicines). Refuse anything outside that in one short "
+    "sentence and offer to help with a health question instead.\n"
+    "NEVER do any of the following:\n"
+    "- give a diagnosis, or say what a patient 'has'\n"
+    "- name, recommend, compare or substitute a specific drug or brand\n"
+    "- give any dose, strength, frequency or duration of any medicine\n"
+    "- tell anyone to start, stop or change a prescribed medicine\n"
+    "- interpret a lab report, scan or prescription as a conclusion\n"
+    "- discuss pregnancy termination, controlled substances, or self-treatment "
+    "of a serious condition\n"
+    "- ask for or repeat a patient's name, phone number, address, ID numbers, "
+    "or any other identifying detail\n"
+    "ALWAYS: keep the reply under 120 words, plain language, no markdown "
+    "headings, and point to a qualified doctor for anything personal. If the "
+    "message suggests an emergency, say to seek emergency care immediately and "
+    "stop there."
+)
+
+# Red flags are answered without calling the model at all: a generated answer
+# is a worse thing to put in front of someone describing chest pain than a
+# fixed one, and it cannot be slow or fail.
+EMERGENCY_PATTERNS = re.compile(
+    r"\b(chest pain|heart attack|stroke|can'?t breathe|cannot breathe|"
+    r"difficulty breathing|unconscious|unresponsive|seizure|fainted|"
+    r"severe bleeding|bleeding heavily|coughing blood|vomiting blood|"
+    r"suicide|suicidal|kill myself|end my life|self[- ]harm|overdose|"
+    r"poisoned|anaphyla)",
+    re.IGNORECASE,
+)
+
+EMERGENCY_REPLY = (
+    "This may be a medical emergency. Please call 108 (ambulance) or go to the "
+    "nearest emergency department right now — do not wait for an online answer. "
+    "If you are having thoughts of harming yourself, call the Tele-MANAS "
+    "helpline on 14416; someone is available at any hour."
+)
+
+# Last line of defence on the way out: anything that reads like a dose, or a
+# flat diagnosis, is replaced rather than softened. Matching is deliberately
+# blunt — a false positive costs one canned reply, a false negative is dosing
+# advice from a chatbot.
+UNSAFE_OUTPUT = re.compile(
+    r"(\b\d+\s?(mg|mcg|ml|iu|g)\b)"
+    r"|(\b(take|swallow|inject|apply)\b[^.]{0,40}\b(tablets?|capsules?|syrups?|"
+    r"injections?|doses?|drops?)\b)"
+    r"|(\b(twice|thrice|once)\s+(a|per)\s+day\b)"
+    r"|(\byou (have|are suffering from|are diagnosed with)\b)",
+    re.IGNORECASE,
+)
+
+UNSAFE_OUTPUT_REPLY = (
+    "I can't advise on medicines or doses, and I can't tell you what condition "
+    "you have — that needs a doctor who can examine you. I can help you find "
+    "the right specialist on Docatho, or explain what a symptom generally means."
+)
+
+# Identifiers are stripped before anything leaves our server. The patient's own
+# message is still stored intact in AIChatMessage; it is only the copy handed to
+# Google that is redacted.
+_PHI_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"), "[email]"),
+    (re.compile(r"\b(?:\+91[\-\s]?)?[6-9]\d{9}\b"), "[phone]"),
+    (re.compile(r"\b\d{4}\s?\d{4}\s?\d{4}\b"), "[id]"),  # Aadhaar-shaped
+    (re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b"), "[id]"),  # PAN-shaped
+    (re.compile(r"\b\d{12,}\b"), "[id]"),
+]
+
+MAX_MESSAGE_CHARS = 1000
+
+
+def redact_phi(text: str) -> str:
+    """Remove direct identifiers from text that is about to leave our server."""
+    cleaned = text or ""
+    for pattern, placeholder in _PHI_PATTERNS:
+        cleaned = pattern.sub(placeholder, cleaned)
+    return cleaned[:MAX_MESSAGE_CHARS]
+
+
+def is_emergency(text: str) -> bool:
+    return bool(EMERGENCY_PATTERNS.search(text or ""))
+
+
+def is_unsafe_output(text: str) -> bool:
+    return bool(UNSAFE_OUTPUT.search(text or ""))
+
 RULE_RESPONSES: dict[str, str] = {
     "fever": (
         "A mild fever often responds to rest, fluids, and paracetamol as directed "
@@ -115,6 +209,7 @@ class HealthcareAIService:
 
     def __init__(self) -> None:
         self.openai_key = getattr(settings, "OPENAI_API_KEY", "") or ""
+        self.gemini_key = getattr(settings, "GEMINI_API_KEY", "") or ""
 
     def chat(self, message: str, history: list[dict[str, str]] | None = None) -> AIResponse:
         text = (message or "").strip()
@@ -125,16 +220,46 @@ class HealthcareAIService:
                 source="fallback",
             )
 
-        if self.openai_key:
+        # Before any model call: an emergency gets the fixed answer.
+        if is_emergency(text):
+            return AIResponse(
+                content=EMERGENCY_REPLY,
+                metadata={"intent": "emergency", "guardrail": "emergency"},
+                source="guardrail",
+            )
+
+        safe_text = redact_phi(text)
+        safe_history = [
+            {"role": h.get("role", "user"), "content": redact_phi(h.get("content", ""))}
+            for h in (history or [])
+            if h.get("role") in ("user", "assistant")
+        ]
+
+        for provider, call in (
+            ("gemini", self._gemini_chat if self.gemini_key else None),
+            ("openai", self._openai_chat if self.openai_key else None),
+        ):
+            if call is None:
+                continue
             try:
-                content = self._openai_chat(text, history or [])
-                return AIResponse(
-                    content=content,
-                    metadata={"intent": "openai"},
-                    source="openai",
-                )
+                content = call(safe_text, safe_history)
             except Exception:
-                logger.exception("OpenAI chat failed; falling back to rules")
+                logger.exception("%s chat failed; trying next source", provider)
+                continue
+            # Out-bound guardrail: a model answer that reads like dosing or a
+            # diagnosis is dropped, not shown.
+            if is_unsafe_output(content):
+                logger.warning("%s reply blocked by output guardrail", provider)
+                return AIResponse(
+                    content=f"{UNSAFE_OUTPUT_REPLY}\n\n{DISCLAIMER}",
+                    metadata={"intent": "blocked", "guardrail": "unsafe_output"},
+                    source="guardrail",
+                )
+            return AIResponse(
+                content=content,
+                metadata={"intent": provider},
+                source=provider,
+            )
 
         intent = self._match_intent(text)
         body = RULE_RESPONSES.get(intent, self._generic_response())
@@ -204,19 +329,58 @@ class HealthcareAIService:
                     results.append({"name": chunk, "dosage": ""})
         return results[:20]
 
+    def _gemini_chat(self, message: str, history: list[dict[str, str]]) -> str:
+        """Call Gemini over REST. No SDK — one POST, one JSON answer."""
+        import requests
+
+        contents = [
+            {
+                "role": "model" if item["role"] == "assistant" else "user",
+                "parts": [{"text": item.get("content", "")}],
+            }
+            for item in history[-6:]
+        ]
+        contents.append({"role": "user", "parts": [{"text": message}]})
+
+        response = requests.post(
+            GEMINI_URL.format(model=getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash")),
+            headers={"x-goog-api-key": self.gemini_key},
+            json={
+                "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                "contents": contents,
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 400},
+                # Google's own filters sit under ours; both have to pass.
+                "safetySettings": [
+                    {"category": c, "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+                    for c in (
+                        "HARM_CATEGORY_HARASSMENT",
+                        "HARM_CATEGORY_HATE_SPEECH",
+                        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    )
+                ],
+            },
+            timeout=GEMINI_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            # Blocked by Google's filter, or an empty answer — either way there
+            # is nothing safe to show, so fall through to the next source.
+            raise ValueError("Gemini returned no candidate")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts).strip()
+        if not text:
+            raise ValueError("Gemini returned an empty answer")
+        return f"{text}\n\n{DISCLAIMER}"
+
     def _openai_chat(self, message: str, history: list[dict[str, str]]) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.openai_key)
         messages: list[dict[str, str]] = [
-            {
-                "role": "system",
-                "content": (
-                    "You are Docatho DocAI, a helpful Indian healthcare assistant. "
-                    "Give concise, safe guidance and remind users to see a doctor for "
-                    "serious symptoms. Never prescribe specific drug doses."
-                ),
-            },
+            {"role": "system", "content": SYSTEM_PROMPT},
         ]
         for item in history[-6:]:
             role = item.get("role", "user")

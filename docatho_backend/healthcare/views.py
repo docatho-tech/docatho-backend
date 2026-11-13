@@ -28,8 +28,10 @@ from rest_framework.decorators import action
 from rest_framework.generics import ListAPIView
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from docatho_backend.healthcare.ai_service import MAX_MESSAGE_CHARS
 from docatho_backend.healthcare.ai_service import HealthcareAIService
 from docatho_backend.healthcare.appointment_payments import confirm_appointment_payment
 from docatho_backend.healthcare.appointment_payments import create_appointment_checkout
@@ -1802,13 +1804,29 @@ class ContentPageViewSet(viewsets.ModelViewSet):
         return qs
 
 
+class AIChatBurstThrottle(UserRateThrottle):
+    scope = "ai_chat_burst"
+
+
+class AIChatDailyThrottle(UserRateThrottle):
+    scope = "ai_chat_day"
+
+
 class AIChatAPIView(APIView):
     permission_classes = [IsCustomer]
+    # Every message costs money at the model and the endpoint is the one place
+    # a scripted client could both run up a bill and spam a patient's history.
+    throttle_classes = [AIChatBurstThrottle, AIChatDailyThrottle]
 
     def post(self, request):
-        message = request.data.get("message", "")
+        message = (request.data.get("message") or "").strip()[:MAX_MESSAGE_CHARS]
         session_id = request.data.get("session_id")
         history = request.data.get("history", [])
+        if not message:
+            return Response(
+                {"detail": "message is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if session_id:
             session = get_object_or_404(AIChatSession, pk=session_id, user=request.user)
         else:
