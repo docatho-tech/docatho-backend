@@ -43,6 +43,8 @@ from docatho_backend.healthcare.ai_service import MAX_MESSAGE_CHARS
 from docatho_backend.healthcare.ai_service import HealthcareAIService
 from docatho_backend.healthcare.appointment_payments import confirm_appointment_payment
 from docatho_backend.healthcare.appointment_payments import create_appointment_checkout
+from docatho_backend.healthcare.appointment_payments import is_free_appointment
+from docatho_backend.healthcare.appointment_payments import settle_free_appointment
 from docatho_backend.healthcare.auto_accept import auto_accept_deadline
 from docatho_backend.healthcare.auto_accept import auto_accept_overdue
 from docatho_backend.healthcare.dashboard_stats import build_dashboard_stats
@@ -429,10 +431,14 @@ class DiagnosticTestCategorySerializer(serializers.ModelSerializer):
 
 class DiagnosticTestSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(
-        source="category.name", read_only=True, default=None,
+        source="category.name",
+        read_only=True,
+        default=None,
     )
     provider_name = serializers.CharField(
-        source="provider.name", read_only=True, default=None,
+        source="provider.name",
+        read_only=True,
+        default=None,
     )
     discount_percent = serializers.IntegerField(read_only=True)
 
@@ -487,7 +493,9 @@ class DiagnosticPackageSerializer(serializers.ModelSerializer):
     )
     tests = DiagnosticTestSerializer(many=True, read_only=True)
     provider_name = serializers.CharField(
-        source="provider.name", read_only=True, default=None,
+        source="provider.name",
+        read_only=True,
+        default=None,
     )
     discount_percent = serializers.IntegerField(read_only=True)
     tests_total = serializers.SerializerMethodField()
@@ -552,7 +560,9 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
         source="patient.profile_picture",
         read_only=True,
     )
-    center_name = serializers.CharField(source="center.name", read_only=True, default="")
+    center_name = serializers.CharField(
+        source="center.name", read_only=True, default=""
+    )
     center_logo = serializers.CharField(
         source="center.logo_url",
         read_only=True,
@@ -609,7 +619,11 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         # Only on create: an admin PATCHing a status sends neither list, and
         # refusing that would make every status change a 400.
-        if self.instance is None and not attrs.get("tests") and not attrs.get("packages"):
+        if (
+            self.instance is None
+            and not attrs.get("tests")
+            and not attrs.get("packages")
+        ):
             raise serializers.ValidationError(
                 "Choose at least one test or package to book.",
             )
@@ -640,7 +654,8 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
             booking.tests.set(booked_tests.values())
 
         booking.total_amount = sum(
-            (test.price for test in priced_separately), Decimal("0"),
+            (test.price for test in priced_separately),
+            Decimal("0"),
         ) + sum((package.price for package in packages), Decimal("0"))
         booking.save(update_fields=["total_amount"])
         return booking
@@ -913,7 +928,7 @@ def _notify_appointment_booked(appointment):
 
 
 def _mode_label(appointment) -> str:
-    """"online consult" / "In-clinic visit", as the notification rows read."""
+    """ "online consult" / "In-clinic visit", as the notification rows read."""
     if appointment.consultation_mode == ConsultationMode.ONLINE:
         return "online consult"
     if appointment.consultation_mode == ConsultationMode.HOME_VISIT:
@@ -926,7 +941,7 @@ def _provider_user_for(appointment):
 
 
 def notify_appointment_reminder(appointment):
-    """"Reminder: Starts in 30 minutes." — sent once, by the sweep command."""
+    """ "Reminder: Starts in 30 minutes." — sent once, by the sweep command."""
     provider_user = _provider_user_for(appointment)
     if not provider_user:
         return None
@@ -1207,7 +1222,8 @@ class SavedDoctorAPIView(APIView):
         doctor_id = request.data.get("doctor_id")
         if not doctor_id:
             return Response(
-                {"detail": "doctor_id is required"}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "doctor_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         doctor = get_object_or_404(DoctorProfile, pk=doctor_id)
         SavedDoctor.objects.get_or_create(user=request.user, doctor=doctor)
@@ -1219,10 +1235,12 @@ class SavedDoctorAPIView(APIView):
         )
         if not doctor_id:
             return Response(
-                {"detail": "doctor_id is required"}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "doctor_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         deleted, _ = SavedDoctor.objects.filter(
-            user=request.user, doctor_id=doctor_id,
+            user=request.user,
+            doctor_id=doctor_id,
         ).delete()
         if not deleted:
             return Response(status=status.HTTP_404_NOT_FOUND)
@@ -1343,7 +1361,22 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
         if appointment.payment_status == AppointmentPaymentStatus.PAID:
             return Response(
-                {"detail": "Already paid."}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Already paid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # A zero-fee consultation has no order to open — the gateway rejects
+        # anything under ₹1. Settle it here and answer with a null order, which
+        # is the shape the app already reads as "nothing left to pay".
+        if is_free_appointment(appointment):
+            settle_free_appointment(appointment)
+            return Response(
+                {
+                    "appointment": AppointmentSerializer(
+                        appointment,
+                        context={"request": request},
+                    ).data,
+                    "razorpay_order": None,
+                },
             )
         try:
             razorpay_order = create_appointment_checkout(appointment)
@@ -1373,7 +1406,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
         try:
             confirm_appointment_payment(
-                appointment, order_id, payment_id, signature, request.data,
+                appointment,
+                order_id,
+                payment_id,
+                signature,
+                request.data,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -1391,14 +1428,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
         client = __import__(
-            "docatho_backend.healthcare.hms", fromlist=["HMSClient"],
+            "docatho_backend.healthcare.hms",
+            fromlist=["HMSClient"],
         ).HMSClient()
         # Read before minting: `mint_video_token` stamps `video_started_at`
         # itself, so asking afterwards always answers "already started" and the
         # doctor is never told anyone is waiting.
         first_join = appointment.video_started_at is None
         payload = mint_video_token(
-            appointment, user=request.user, role=client.patient_role,
+            appointment,
+            user=request.user,
+            role=client.patient_role,
         )
         if first_join:
             _notify_patient_waiting(appointment)
@@ -1412,7 +1452,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             AppointmentStatus.CANCELLED,
         ):
             return Response(
-                {"detail": "Cannot cancel."}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Cannot cancel."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         appointment.status = AppointmentStatus.CANCELLED
         appointment.save(update_fields=["status", "updated_at"])
@@ -1429,7 +1470,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         rating = request.data.get("rating")
         if not rating or not (1 <= int(rating) <= 5):
             return Response(
-                {"detail": "rating must be 1-5."}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "rating must be 1-5."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         appointment.patient_rating = int(rating)
         appointment.patient_feedback = request.data.get("feedback", "")
@@ -1688,7 +1730,11 @@ class DiagnosticCentreViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class DiagnosticPackageViewSet(viewsets.ModelViewSet):
-    queryset = DiagnosticPackage.objects.all().select_related("provider").prefetch_related("tests")
+    queryset = (
+        DiagnosticPackage.objects.all()
+        .select_related("provider")
+        .prefetch_related("tests")
+    )
     serializer_class = DiagnosticPackageSerializer
     permission_classes = [ReadOnlyOrAdmin]
     pagination_class = GenericPaginationClass
@@ -1873,7 +1919,9 @@ class AIChatAPIView(APIView):
             if message:
                 title = message[:50]
             elif upload:
-                title = "Voice note" if mime in ALLOWED_AUDIO_MIME else "Shared a document"
+                title = (
+                    "Voice note" if mime in ALLOWED_AUDIO_MIME else "Shared a document"
+                )
             else:
                 title = "Health chat"
             session = AIChatSession.objects.create(user=request.user, title=title)
@@ -2006,7 +2054,8 @@ class ProviderDoctorProfileAPIView(APIView):
         profile = _doctor_profile_for_provider(request.user)
         if not profile:
             return Response(
-                {"detail": "No doctor profile."}, status=status.HTTP_404_NOT_FOUND,
+                {"detail": "No doctor profile."},
+                status=status.HTTP_404_NOT_FOUND,
             )
         return Response(ProviderDoctorProfileSerializer(profile).data)
 
@@ -2014,10 +2063,13 @@ class ProviderDoctorProfileAPIView(APIView):
         profile = _doctor_profile_for_provider(request.user)
         if not profile:
             return Response(
-                {"detail": "No doctor profile."}, status=status.HTTP_404_NOT_FOUND,
+                {"detail": "No doctor profile."},
+                status=status.HTTP_404_NOT_FOUND,
             )
         serializer = ProviderDoctorProfileSerializer(
-            profile, data=request.data, partial=True,
+            profile,
+            data=request.data,
+            partial=True,
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -2050,7 +2102,8 @@ class ProviderAvailabilityAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         slot = serializer.save(doctor=profile)
         return Response(
-            DoctorAvailabilitySerializer(slot).data, status=status.HTTP_201_CREATED,
+            DoctorAvailabilitySerializer(slot).data,
+            status=status.HTTP_201_CREATED,
         )
 
     def patch(self, request):
@@ -2075,7 +2128,8 @@ class ProviderAppointmentListAPIView(APIView):
         # the queue never shows a request the platform has already accepted.
         auto_accept_overdue()
         qs = Appointment.objects.filter(doctor=profile).select_related(
-            "patient", "doctor__provider",
+            "patient",
+            "doctor__provider",
         )
         status_filter = request.query_params.get("status")
         if status_filter:
@@ -2089,7 +2143,9 @@ class ProviderAppointmentListAPIView(APIView):
         if not profile:
             return Response(status=status.HTTP_404_NOT_FOUND)
         appointment = get_object_or_404(
-            Appointment, pk=request.data.get("appointment_id"), doctor=profile,
+            Appointment,
+            pk=request.data.get("appointment_id"),
+            doctor=profile,
         )
         new_status = request.data.get("status")
         allowed = {
@@ -2101,7 +2157,8 @@ class ProviderAppointmentListAPIView(APIView):
         }
         if new_status not in allowed:
             return Response(
-                {"detail": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Invalid status"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         appointment.status = new_status
         if "prescription_notes" in request.data:
@@ -2296,9 +2353,58 @@ class ProviderAppointmentVideoTokenAPIView(APIView):
 
         client = HMSClient()
         payload = mint_video_token(
-            appointment, user=request.user, role=client.doctor_role,
+            appointment,
+            user=request.user,
+            role=client.doctor_role,
         )
         return Response(payload)
+
+
+class ProviderAppointmentVideoEndAPIView(APIView):
+    """The doctor has left the room, so the consultation is over.
+
+    Nothing else closed a video consultation: minting a token moves it to
+    in_progress and no path ever stamped `video_ended_at` or completed it, so
+    every online appointment stayed in_progress for good — the doctor's queue
+    never cleared it and the patient could not rate it, because rating asks for
+    a completed appointment. Only the doctor leaving ends it; a patient who
+    drops out and rejoins is still in the same consultation.
+    """
+
+    permission_classes = [IsProvider]
+
+    def post(self, request, appointment_id: int):
+        profile = _doctor_profile_for_provider(request.user)
+        if not profile:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        appointment = get_object_or_404(Appointment, pk=appointment_id, doctor=profile)
+        if appointment.consultation_mode != ConsultationMode.ONLINE:
+            return Response(
+                {"detail": "Not a video consultation."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        update_fields = ["updated_at"]
+        if appointment.video_ended_at is None:
+            appointment.video_ended_at = now
+            update_fields.append("video_ended_at")
+
+        # Only in_progress completes. A cancelled or already-completed
+        # consultation keeps the status it has — leaving the room twice must
+        # not resurrect it or re-notify the patient.
+        completed = appointment.status == AppointmentStatus.IN_PROGRESS
+        if completed:
+            appointment.status = AppointmentStatus.COMPLETED
+            appointment.completed_at = now
+            update_fields += ["status", "completed_at"]
+
+        appointment.save(update_fields=update_fields)
+        if completed:
+            _notify_appointment_status_change(appointment, AppointmentStatus.COMPLETED)
+        return Response(
+            AppointmentSerializer(appointment, context={"request": request}).data,
+        )
 
 
 class ConsultationMessageSerializer(serializers.ModelSerializer):
@@ -2326,7 +2432,13 @@ class ConsultationMessageSerializer(serializers.ModelSerializer):
             "read_at",
             "created_at",
         )
-        read_only_fields = ("id", "sender", "sender_name", "is_from_patient", "created_at")
+        read_only_fields = (
+            "id",
+            "sender",
+            "sender_name",
+            "is_from_patient",
+            "created_at",
+        )
 
     def validate(self, attrs):
         kind = attrs.get("kind", ConsultationMessageKind.TEXT)
@@ -2399,7 +2511,11 @@ class AdminPatientListAPIView(ListAPIView):
     pagination_class = GenericPaginationClass
     # OrderingFilter is a project-wide default backend; naming the list here
     # dropped it, so `?ordering=` was silently ignored on this endpoint.
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
     filterset_fields = ["is_active", "device", "source"]
     search_fields = ["name", "phone", "email", "addresses__city"]
     ordering_fields = [
@@ -2427,7 +2543,11 @@ class AdminDoctorListAPIView(ListAPIView):
     permission_classes = [IsAdmin]
     serializer_class = AdminDoctorSerializer
     pagination_class = GenericPaginationClass
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
     filterset_fields = [
         "verification_status",
         "is_verified",
@@ -2515,7 +2635,8 @@ class AdminDoctorAvailabilityViewSet(viewsets.ModelViewSet):
             day_of_week=data["day_of_week"],
             start_time=data["start_time"],
             consultation_mode=data.get(
-                "consultation_mode", ConsultationMode.ONLINE,
+                "consultation_mode",
+                ConsultationMode.ONLINE,
             ),
         ).exists()
         if clash:
@@ -2692,7 +2813,9 @@ class AdminPrescriptionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdmin]
     serializer_class = AdminPrescriptionSerializer
     pagination_class = GenericPaginationClass
-    queryset = Prescription.objects.select_related("user", "reviewed_by").prefetch_related(
+    queryset = Prescription.objects.select_related(
+        "user", "reviewed_by"
+    ).prefetch_related(
         "orders__items__medicine",
     )
     filterset_fields = ["status", "user"]
@@ -2756,6 +2879,7 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             msg = "Another account already uses this number."
             raise serializers.ValidationError(msg)
         return phone
+
     # The M2M was read-only in every serializer, so the dashboard's Specialties
     # manager wrote rows that nothing could ever attach to a doctor — and the
     # patient app's specialty browse returned an empty list forever.
@@ -2834,7 +2958,10 @@ class AdminDoctorProfileSerializer(serializers.ModelSerializer):
             user.phone = phone
             user.save(update_fields=["phone"])
 
-        if "qualifications_ug" in validated_data or "qualifications_pg" in validated_data:
+        if (
+            "qualifications_ug" in validated_data
+            or "qualifications_pg" in validated_data
+        ):
             ug = validated_data.get("qualifications_ug", instance.qualifications_ug)
             pg = validated_data.get("qualifications_pg", instance.qualifications_pg)
             validated_data["qualifications"] = list(ug or []) + list(pg or [])
@@ -2928,7 +3055,8 @@ class AdminDiagnosticBookingViewSet(viewsets.ModelViewSet):
     serializer_class = AdminDiagnosticBookingSerializer
     pagination_class = GenericPaginationClass
     queryset = DiagnosticBooking.objects.prefetch_related(
-        "tests", "packages",
+        "tests",
+        "packages",
     ).select_related("patient", "center")
     filterset_fields = [
         "status",

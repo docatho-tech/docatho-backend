@@ -18,11 +18,36 @@ from .models import AppointmentStatus
 RAZORPAY_API_BASE = "https://api.razorpay.com/v1"
 
 
+def is_free_appointment(appointment: Appointment) -> bool:
+    """A consultation with nothing to charge.
+
+    Razorpay rejects any order below ₹1, so a doctor whose online fee is 0 —
+    most of the directory — cannot be booked through the gateway at all. The
+    fee is read from the doctor at creation (never sent by the client), so
+    trusting it here does not reopen the free-consultation hole.
+    """
+    return appointment.fee <= 0
+
+
+def settle_free_appointment(appointment: Appointment) -> None:
+    """Mark a zero-fee consultation paid without touching the gateway."""
+    appointment.payment_status = AppointmentPaymentStatus.PAID
+    appointment.paid_at = timezone.now()
+    appointment.payment_method = "free"
+    update_fields = ["payment_status", "paid_at", "payment_method", "updated_at"]
+    if appointment.doctor.auto_accept_appointments:
+        appointment.status = AppointmentStatus.CONFIRMED
+        update_fields.append("status")
+    appointment.save(update_fields=update_fields)
+
+
 def create_appointment_checkout(appointment: Appointment) -> dict[str, Any]:
     if appointment.consultation_mode != "online":
         raise ValueError("Only online consultations require prepayment")
     if appointment.payment_status == AppointmentPaymentStatus.PAID:
         raise ValueError("Appointment already paid")
+    if is_free_appointment(appointment):
+        raise ValueError("Nothing to charge for this appointment")
 
     amount_paisa = int((appointment.fee * 100).to_integral_value())
     client = RazorpayClient()

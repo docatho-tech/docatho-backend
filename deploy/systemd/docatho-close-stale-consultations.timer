@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly sweep of consultations stuck in_progress
+
+[Timer]
+# Hourly is enough: the sweep only touches consultations whose join window has
+# already closed, so nothing is waiting on it to the minute.
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

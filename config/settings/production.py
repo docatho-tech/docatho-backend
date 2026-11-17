@@ -1,7 +1,12 @@
 # ruff: noqa: E501
+from django.core.exceptions import ImproperlyConfigured
+
 from .base import *  # noqa: F403
 from .base import DATABASES
 from .base import INSTALLED_APPS
+from .base import RAZORPAY_KEY_ID
+from .base import RAZORPAY_KEY_SECRET
+from .base import RAZORPAY_WEBHOOK_SECRET
 from .base import REDIS_URL
 from .base import SPECTACULAR_SETTINGS
 from .base import env
@@ -200,3 +205,30 @@ SPECTACULAR_SETTINGS["SERVERS"] = [
 ]
 # Your stuff...
 # ------------------------------------------------------------------------------
+
+# Razorpay
+# ------------------------------------------------------------------------------
+# Blank keys do not fail loudly on their own: checkout gets a 401 from Razorpay
+# and the webhook rejects every delivery as unsigned, both of which read as "the
+# payment didn't work" long after the deploy that caused it. Refuse to boot
+# instead. Set RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET / RZP_WEBHOOK_SECRET.
+_missing_razorpay = [
+    name
+    for name, value in (
+        ("RAZORPAY_KEY_ID", RAZORPAY_KEY_ID),
+        ("RAZORPAY_KEY_SECRET", RAZORPAY_KEY_SECRET),
+        ("RZP_WEBHOOK_SECRET", RAZORPAY_WEBHOOK_SECRET),
+    )
+    if not value
+]
+if _missing_razorpay:
+    msg = f"Razorpay is not configured in production: {', '.join(_missing_razorpay)} is blank."
+    raise ImproperlyConfigured(msg)
+
+if RAZORPAY_KEY_ID.startswith("rzp_test_"):
+    import warnings
+
+    warnings.warn(
+        f"Razorpay is running on TEST keys ({RAZORPAY_KEY_ID}) in production — no real money will move.",
+        stacklevel=1,
+    )

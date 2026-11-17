@@ -20,8 +20,13 @@ if READ_DOT_ENV_FILE:
 DEBUG = env.bool("DJANGO_DEBUG", False)
 
 # razorpay settings
-RAZORPAY_KEY_ID = env("RZP_TEST_ID", default="")
-RAZORPAY_KEY_SECRET = env("RZP_TEST_SECRET", default="")
+# RZP_TEST_* are the original names and still work; RAZORPAY_KEY_* is what a
+# live-key environment should set, since "TEST" in the name of the variable
+# holding a live secret is how the wrong keys get deployed. Production refuses
+# to start with either pair blank — an empty key is a 401 at checkout, i.e. a
+# patient who cannot pay and no error anyone sees.
+RAZORPAY_KEY_ID = env("RAZORPAY_KEY_ID", default=env("RZP_TEST_ID", default=""))
+RAZORPAY_KEY_SECRET = env("RAZORPAY_KEY_SECRET", default=env("RZP_TEST_SECRET", default=""))
 RAZORPAY_WEBHOOK_SECRET = env("RZP_WEBHOOK_SECRET", default="")
 
 # E-Pharmacy settings

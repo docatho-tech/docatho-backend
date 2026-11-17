@@ -1,0 +1,11 @@
+[Unit]
+Description=docatho — close online consultations left running past their join window
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=docatho
+Group=www-data
+WorkingDirectory=/opt/docatho/docatho-backend
+EnvironmentFile=/etc/docatho/docatho.env
+ExecStart=/opt/docatho/docatho-backend/.venv/bin/python manage.py close_stale_consultations

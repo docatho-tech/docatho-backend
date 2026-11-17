@@ -8,7 +8,9 @@ from docatho_backend.healthcare.prescription_api import AppointmentPrescriptionA
 router = DefaultRouter()
 router.register("appointments", views.AppointmentViewSet, basename="appointment")
 router.register(
-    "diagnostic-tests", views.DiagnosticTestViewSet, basename="diagnostic-test"
+    "diagnostic-tests",
+    views.DiagnosticTestViewSet,
+    basename="diagnostic-test",
 )
 router.register(
     "diagnostic-centres",
@@ -16,7 +18,9 @@ router.register(
     basename="diagnostic-centre",
 )
 router.register(
-    "diagnostic-packages", views.DiagnosticPackageViewSet, basename="diagnostic-package"
+    "diagnostic-packages",
+    views.DiagnosticPackageViewSet,
+    basename="diagnostic-package",
 )
 router.register(
     "diagnostic-categories",
@@ -24,12 +28,16 @@ router.register(
     basename="diagnostic-category",
 )
 router.register(
-    "diagnostic-bookings", views.DiagnosticBookingViewSet, basename="diagnostic-booking"
+    "diagnostic-bookings",
+    views.DiagnosticBookingViewSet,
+    basename="diagnostic-booking",
 )
 router.register("reminders", views.MedicineReminderViewSet, basename="reminder")
 router.register("wishlist", views.WishlistViewSet, basename="wishlist")
 router.register(
-    "support-tickets", views.SupportTicketViewSet, basename="support-ticket"
+    "support-tickets",
+    views.SupportTicketViewSet,
+    basename="support-ticket",
 )
 router.register("content", views.ContentPageViewSet, basename="content")
 router.register("specialties", views.MedicalSpecialtyViewSet, basename="specialty")
@@ -39,7 +47,9 @@ router.register(
     basename="qualification",
 )
 router.register(
-    "admin/prescriptions", views.AdminPrescriptionViewSet, basename="admin-prescription"
+    "admin/prescriptions",
+    views.AdminPrescriptionViewSet,
+    basename="admin-prescription",
 )
 router.register(
     "admin/availability",
@@ -129,6 +139,11 @@ urlpatterns = [
         name="provider-appointment-video-token",
     ),
     path(
+        "provider/appointments/<int:appointment_id>/video-end/",
+        views.ProviderAppointmentVideoEndAPIView.as_view(),
+        name="provider-appointment-video-end",
+    ),
+    path(
         "appointments/<int:appointment_id>/messages/",
         views.ConsultationMessagesAPIView.as_view(),
         name="appointment-messages",
@@ -149,7 +164,9 @@ urlpatterns = [
         name="admin-patient-detail",
     ),
     path(
-        "admin/doctors/", views.AdminDoctorListAPIView.as_view(), name="admin-doctors"
+        "admin/doctors/",
+        views.AdminDoctorListAPIView.as_view(),
+        name="admin-doctors",
     ),
     path(
         "admin/doctors/<int:pk>/",
@@ -169,7 +186,7 @@ urlpatterns = [
     path(
         "admin/diagnostic-bookings/<int:pk>/",
         views.AdminDiagnosticBookingViewSet.as_view(
-            {"get": "retrieve", "patch": "partial_update", "delete": "destroy"}
+            {"get": "retrieve", "patch": "partial_update", "delete": "destroy"},
         ),
         name="admin-diagnostic-booking-detail",
     ),

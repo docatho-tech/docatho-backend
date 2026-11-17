@@ -63,9 +63,14 @@ sudo -u docatho -E .venv/bin/python manage.py createsuperuser
 ### systemd services
 
 ```bash
-sudo cp deploy/systemd/docatho-*.service /etc/systemd/system/
+sudo cp deploy/systemd/docatho-*.service deploy/systemd/docatho-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now docatho-gunicorn docatho-celery docatho-celery-beat
+# Hourly sweep: completes online consultations still marked in_progress after
+# their join window closed (app killed mid-call, or the doctor never joined).
+# Without it those appointments stay in_progress for good — the doctor's queue
+# never clears them and the patient cannot rate them.
+sudo systemctl enable --now docatho-close-stale-consultations.timer
 ```
 
 ### nginx + TLS
