@@ -1,6 +1,4 @@
 # ruff: noqa: E501
-from django.core.exceptions import ImproperlyConfigured
-
 from .base import *  # noqa: F403
 from .base import DATABASES
 from .base import INSTALLED_APPS
@@ -210,8 +208,14 @@ SPECTACULAR_SETTINGS["SERVERS"] = [
 # ------------------------------------------------------------------------------
 # Blank keys do not fail loudly on their own: checkout gets a 401 from Razorpay
 # and the webhook rejects every delivery as unsigned, both of which read as "the
-# payment didn't work" long after the deploy that caused it. Refuse to boot
-# instead. Set RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET / RZP_WEBHOOK_SECRET.
+# payment didn't work" long after the deploy that caused it. Say so at boot.
+# Set RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET / RZP_WEBHOOK_SECRET.
+#
+# This used to raise and refuse to boot. It took the whole API — appointments,
+# diagnostics, pharmacy browsing, login — down with it on a host that had never
+# had the keys. A payment misconfiguration costs payments, not the platform:
+# RazorpayClient._verify_signature already refuses to verify anything without a
+# secret, so an unconfigured deployment cannot mark an order paid either way.
 _missing_razorpay = [
     name
     for name, value in (
@@ -221,13 +225,16 @@ _missing_razorpay = [
     )
     if not value
 ]
+
+import warnings  # noqa: E402
+
 if _missing_razorpay:
-    msg = f"Razorpay is not configured in production: {', '.join(_missing_razorpay)} is blank."
-    raise ImproperlyConfigured(msg)
-
-if RAZORPAY_KEY_ID.startswith("rzp_test_"):
-    import warnings
-
+    warnings.warn(
+        f"Razorpay is not configured in production: {', '.join(_missing_razorpay)} is blank. "
+        "Payments will fail for every patient until these are set.",
+        stacklevel=1,
+    )
+elif RAZORPAY_KEY_ID.startswith("rzp_test_"):
     warnings.warn(
         f"Razorpay is running on TEST keys ({RAZORPAY_KEY_ID}) in production — no real money will move.",
         stacklevel=1,

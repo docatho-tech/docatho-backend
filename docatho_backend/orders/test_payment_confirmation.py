@@ -275,6 +275,14 @@ def test_verify_payment_signature_rejects_missing_args(oid, pid, sig):
     assert client.verify_payment_signature(oid, pid, sig) is False
 
 
+def test_verify_payment_signature_rejects_everything_when_secret_is_blank():
+    """An unconfigured deployment must not accept a signature anyone can forge."""
+    client = RazorpayClient(key_id="id", key_secret="")
+    forged = hmac.new(b"", msg=b"order_1|pay_1", digestmod=hashlib.sha256).hexdigest()
+    assert client.verify_payment_signature("order_1", "pay_1", forged) is False
+    assert client._verify_signature(b"body", forged, "") is False  # noqa: SLF001
+
+
 def test_client_confirm_payment_raises_for_unknown_transaction():
     client = RazorpayClient(key_id="id", key_secret=SECRET)
     with pytest.raises(ValueError):

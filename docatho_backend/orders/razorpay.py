@@ -69,6 +69,11 @@ class RazorpayClient:
 
     @staticmethod
     def _verify_signature(message: bytes, signature: str, secret: str) -> bool:
+        # A blank secret still produces a valid HMAC, one anybody can compute,
+        # so an unconfigured deployment would accept forged signatures and mark
+        # orders paid. Every signature check routes through here: refuse.
+        if not secret:
+            return False
         mac = hmac.new(force_bytes(secret), msg=message, digestmod=hashlib.sha256)
         expected = mac.hexdigest()
         return hmac.compare_digest(expected, signature)
