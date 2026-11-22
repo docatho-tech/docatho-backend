@@ -248,6 +248,11 @@ class Appointment(BaseModel):
     patient_rating = models.PositiveSmallIntegerField(null=True, blank=True)
     patient_feedback = models.TextField(blank=True, default="")
     completed_at = models.DateTimeField(null=True, blank=True)
+    # Why a cancelled appointment was cancelled. There is one `cancelled`
+    # status for every reason, so without this a patient who never turned up is
+    # stored identically to a doctor who called in sick — and the two differ on
+    # who is owed a refund.
+    cancellation_reason = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         ordering = ["-scheduled_at"]

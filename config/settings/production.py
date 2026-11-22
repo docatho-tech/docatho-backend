@@ -204,6 +204,18 @@ SPECTACULAR_SETTINGS["SERVERS"] = [
 # Your stuff...
 # ------------------------------------------------------------------------------
 
+# Notifications
+# ------------------------------------------------------------------------------
+# The console backend writes a log line and nothing else, which is how every
+# appointment notification was lost: a doctor was never told a request had come
+# in or that a patient was waiting in the consultation room, and found out only
+# by opening the app. Production delivers through Expo. Override via
+# NOTIFICATION_BACKEND in the env file to turn pushes off without a deploy.
+NOTIFICATION_BACKEND = env(
+    "NOTIFICATION_BACKEND",
+    default="docatho_backend.notifications.services.ExpoPushNotificationService",
+)
+
 # Razorpay
 # ------------------------------------------------------------------------------
 # Blank keys do not fail loudly on their own: checkout gets a 401 from Razorpay

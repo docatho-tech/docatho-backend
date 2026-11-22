@@ -292,3 +292,59 @@ def test_pending_request_reports_when_it_will_be_accepted(auth_client, settings)
     assert rows[accepted.id]["auto_accept_at"] is None
     pending = next(row for row in rows.values() if row["id"] != accepted.id)
     assert pending["auto_accept_at"] is not None
+
+
+def test_cancelling_records_why(auth_client):
+    """A no-show and a doctor calling in sick are both `cancelled`.
+
+    The reason is the only thing that tells them apart, and the two differ on
+    whether the patient is owed a refund — so a cancel that drops it is a cancel
+    nobody can account for later.
+    """
+    profile = DoctorProfileFactory()
+    appointment = Appointment.objects.create(
+        patient=UserFactory(),
+        doctor=profile,
+        scheduled_at=timezone.now() + timedelta(hours=2),
+        consultation_mode=ConsultationMode.IN_CLINIC,
+        status=AppointmentStatus.CONFIRMED,
+        fee=Decimal("500.00"),
+    )
+
+    resp = auth_client(profile.provider.user).patch(
+        "/api/healthcare/provider/appointments/",
+        {
+            "appointment_id": appointment.id,
+            "status": AppointmentStatus.CANCELLED,
+            "cancellation_reason": "Patient did not show up",
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.status == AppointmentStatus.CANCELLED
+    assert appointment.cancellation_reason == "Patient did not show up"
+    assert resp.data["cancellation_reason"] == "Patient did not show up"
+
+
+def test_a_doctor_can_block_and_unblock_a_day(auth_client):
+    """Leave. Without the delete half a day off could never be taken back."""
+    profile = DoctorProfileFactory()
+    client = auth_client(profile.provider.user)
+    day = (timezone.localdate() + timedelta(days=5)).isoformat()
+
+    assert client.post(
+        "/api/healthcare/provider/blocked-dates/",
+        {"date": day, "reason": "Conference"},
+        format="json",
+    ).status_code == 201
+    blocked = client.get("/api/healthcare/provider/availability/").data["blocked_dates"]
+    assert [str(b["date"]) for b in blocked] == [day]
+
+    assert client.delete(
+        f"/api/healthcare/provider/blocked-dates/?date={day}",
+    ).status_code == 204
+    assert client.get(
+        "/api/healthcare/provider/availability/",
+    ).data["blocked_dates"] == []

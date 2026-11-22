@@ -278,3 +278,5 @@ docatho_backend/static/uploads/
 
 docatho_backend/static/invoices/
 docatho_backend/static/prescriptions/
+# Voice notes and documents uploaded to Doc AI land here on a local run.
+docatho_backend/static/ai_chat/
