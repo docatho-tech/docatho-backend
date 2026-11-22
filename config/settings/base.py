@@ -53,11 +53,16 @@ PHARMACY_ORDER_DISCOUNT_PERCENT = env.float(
     "PHARMACY_ORDER_DISCOUNT_PERCENT",
     default=15.0,
 )
-# Delivery backend for notifications; swapped to a Firebase adapter in S5.
+# Delivery backend for notifications. The console backend only logs, so every
+# deployment that wants a phone to light up must point this at the Expo one —
+# production.py does. Tests keep the console default: no HTTP from a test run.
 NOTIFICATION_BACKEND = env(
     "NOTIFICATION_BACKEND",
     default="docatho_backend.notifications.services.ConsoleNotificationService",
 )
+# Optional. Expo accepts unauthenticated sends; an access token is only needed
+# once "enhanced push security" is switched on for the Expo project.
+EXPO_ACCESS_TOKEN = env("EXPO_ACCESS_TOKEN", default="")
 
 # Healthcare AI (optional OpenAI fallback)
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")

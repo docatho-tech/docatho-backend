@@ -222,11 +222,13 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "patient_rating",
             "patient_feedback",
             "completed_at",
+            "cancellation_reason",
             "created_at",
         )
         read_only_fields = (
             "id",
             "status",
+            "cancellation_reason",
             "fee",
             "payment_status",
             "paid_at",
@@ -407,13 +409,91 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
         if not doctor.is_verified:
             raise serializers.ValidationError({"doctor": "Doctor not verified."})
         mode = attrs["consultation_mode"]
+        offered = doctor.consultation_modes or []
+        if offered and mode not in offered:
+            raise serializers.ValidationError(
+                {"consultation_mode": "This doctor does not offer that mode."},
+            )
         fee_map = {
             ConsultationMode.ONLINE: doctor.fee_online,
             ConsultationMode.IN_CLINIC: doctor.fee_in_clinic,
             ConsultationMode.HOME_VISIT: doctor.fee_home_visit,
         }
-        attrs["fee"] = fee_map.get(mode, doctor.fee_online)
+        if mode not in fee_map:
+            # Falling back to the online fee here used to be how an unknown mode
+            # was priced — a home visit charged at the video rate.
+            raise serializers.ValidationError(
+                {"consultation_mode": "Unknown consultation mode."},
+            )
+        attrs["fee"] = fee_map[mode]
+        self._validate_slot(doctor, attrs["scheduled_at"], mode)
         return attrs
+
+    @staticmethod
+    def _js_weekday(local_dt) -> int:
+        """`DoctorAvailability.day_of_week` is JavaScript's ``getDay()``.
+
+        Sunday is 0 there; Python's ``weekday()`` starts at Monday, so using it
+        directly would read every slot one day early.
+        """
+        return (local_dt.weekday() + 1) % 7
+
+    def _validate_slot(self, doctor, scheduled_at, mode):
+        """Refuse a time the doctor never offered.
+
+        None of this was checked before: a patient could book 03:00 on a Sunday,
+        take a slot another patient already had, or book a doctor who was on
+        leave. The availability screen in the partner app wrote hours that
+        nothing read.
+        """
+        if scheduled_at <= timezone.now():
+            raise serializers.ValidationError(
+                {"scheduled_at": "Pick a time in the future."},
+            )
+
+        local = timezone.localtime(scheduled_at)
+        if doctor.blocked_dates.filter(date=local.date()).exists():
+            raise serializers.ValidationError(
+                {"scheduled_at": "The doctor is not available on that date."},
+            )
+
+        # ponytail: a plain existence check, so two bookings landing in the same
+        # instant can both pass. A unique constraint on (doctor, scheduled_at)
+        # is the fix if that ever actually happens.
+        clash = (
+            Appointment.objects.filter(doctor=doctor, scheduled_at=scheduled_at)
+            .exclude(
+                status__in=(
+                    AppointmentStatus.CANCELLED,
+                    AppointmentStatus.REJECTED,
+                ),
+            )
+            .exists()
+        )
+        if clash:
+            raise serializers.ValidationError(
+                {"scheduled_at": "That slot is already booked."},
+            )
+
+        active = doctor.availability_slots.filter(is_active=True)
+        # A doctor who has never opened the availability screen has no hours at
+        # all. Enforcing the window on them would take every such doctor off the
+        # market, so an empty schedule still means "bookable", as before.
+        if not active.exists():
+            return
+
+        at = local.time()
+        within = any(
+            slot.start_time <= at < slot.end_time
+            for slot in active.filter(
+                consultation_mode=mode,
+                day_of_week=self._js_weekday(local),
+            )
+        )
+        if not within:
+            raise serializers.ValidationError(
+                {"scheduled_at": "The doctor has no hours for that mode at that time."},
+            )
 
     def create(self, validated_data):
         validated_data["patient"] = self.context["request"].user
@@ -762,6 +842,22 @@ class DoctorAvailabilitySerializer(serializers.ModelSerializer):
             "consultation_mode",
             "is_active",
         )
+
+    def validate(self, attrs):
+        # PATCH sends one field at a time, so the other end of the range is
+        # whatever is already stored.
+        start = attrs.get("start_time") or getattr(self.instance, "start_time", None)
+        end = attrs.get("end_time") or getattr(self.instance, "end_time", None)
+        if start and end and start >= end:
+            raise serializers.ValidationError(
+                {"end_time": "The end of a slot must be after its start."},
+            )
+        day = attrs.get("day_of_week", getattr(self.instance, "day_of_week", None))
+        if day is not None and not 0 <= day <= 6:
+            raise serializers.ValidationError(
+                {"day_of_week": "Day must be 0 (Sunday) to 6 (Saturday)."},
+            )
+        return attrs
 
 
 class ProviderDoctorProfileSerializer(serializers.ModelSerializer):
@@ -2094,12 +2190,36 @@ class ProviderAvailabilityAPIView(APIView):
             },
         )
 
+    @staticmethod
+    def _overlaps(profile, data, exclude_pk=None):
+        """Whether these hours run into another active slot for the same mode.
+
+        Two slots that overlap are not a harmless duplicate: the booking window
+        check reads whichever matches first, and the doctor sees one set of
+        hours in the app while patients can book against another.
+        """
+        qs = profile.availability_slots.filter(
+            is_active=True,
+            day_of_week=data["day_of_week"],
+            consultation_mode=data["consultation_mode"],
+            start_time__lt=data["end_time"],
+            end_time__gt=data["start_time"],
+        )
+        if exclude_pk is not None:
+            qs = qs.exclude(pk=exclude_pk)
+        return qs.exists()
+
     def post(self, request):
         profile = _doctor_profile_for_provider(request.user)
         if not profile:
             return Response(status=status.HTTP_404_NOT_FOUND)
         serializer = DoctorAvailabilitySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if self._overlaps(profile, serializer.validated_data):
+            return Response(
+                {"detail": "Those hours overlap a slot you already have."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         slot = serializer.save(doctor=profile)
         return Response(
             DoctorAvailabilitySerializer(slot).data,
@@ -2113,8 +2233,71 @@ class ProviderAvailabilityAPIView(APIView):
         slot = get_object_or_404(profile.availability_slots, pk=request.data.get("id"))
         serializer = DoctorAvailabilitySerializer(slot, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        merged = {
+            "day_of_week": serializer.validated_data.get(
+                "day_of_week", slot.day_of_week,
+            ),
+            "consultation_mode": serializer.validated_data.get(
+                "consultation_mode", slot.consultation_mode,
+            ),
+            "start_time": serializer.validated_data.get("start_time", slot.start_time),
+            "end_time": serializer.validated_data.get("end_time", slot.end_time),
+        }
+        # A soft delete (is_active=False) can never clash, and checking it would
+        # stop a doctor removing one of two slots that already overlap.
+        still_active = serializer.validated_data.get("is_active", slot.is_active)
+        if still_active and self._overlaps(profile, merged, exclude_pk=slot.pk):
+            return Response(
+                {"detail": "Those hours overlap a slot you already have."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer.save()
         return Response(serializer.data)
+
+
+class ProviderBlockedDatesAPIView(APIView):
+    """Days the doctor is not taking patients — leave, conferences, holidays.
+
+    `GET /availability/` already returned these; there was no way to create or
+    remove one, so a doctor could not take a day off at all.
+    """
+
+    permission_classes = [IsProvider]
+
+    def post(self, request):
+        profile = _doctor_profile_for_provider(request.user)
+        if not profile:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        date = request.data.get("date")
+        if not date:
+            return Response(
+                {"detail": "date is required (YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        blocked, _ = BlockedDate.objects.get_or_create(
+            doctor=profile,
+            date=date,
+            defaults={"reason": request.data.get("reason", "")},
+        )
+        return Response(
+            {"date": blocked.date, "reason": blocked.reason},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request):
+        profile = _doctor_profile_for_provider(request.user)
+        if not profile:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        date = request.data.get("date") or request.query_params.get("date")
+        if not date:
+            return Response(
+                {"detail": "date is required (YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        deleted, _ = BlockedDate.objects.filter(doctor=profile, date=date).delete()
+        if not deleted:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ProviderAppointmentListAPIView(APIView):
@@ -2166,6 +2349,11 @@ class ProviderAppointmentListAPIView(APIView):
         update_fields = ["status", "updated_at"]
         if "prescription_notes" in request.data:
             update_fields.append("prescription_notes")
+        if new_status == AppointmentStatus.CANCELLED:
+            appointment.cancellation_reason = str(
+                request.data.get("cancellation_reason", ""),
+            )[:255]
+            update_fields.append("cancellation_reason")
         if new_status == AppointmentStatus.COMPLETED:
             appointment.completed_at = timezone.now()
             update_fields.append("completed_at")
@@ -2407,6 +2595,48 @@ class ProviderAppointmentVideoEndAPIView(APIView):
         )
 
 
+def _consultation_message_preview(message) -> str:
+    if message.kind == ConsultationMessageKind.MISSED_CALL:
+        return "Missed call"
+    if message.kind == ConsultationMessageKind.FILE:
+        return message.attachment_name or "Sent an attachment"
+    body = (message.body or "").strip()
+    # The push body is a preview, not the message: a long paragraph is clipped
+    # by the OS anyway, and clipping here keeps the stored record honest.
+    return body[:140]
+
+
+def _notify_consultation_message(appointment, message) -> None:
+    """Tell the other side of the thread that a message arrived.
+
+    The doctor opens the conversation and the patient is not in the app, so
+    without this the message sits unread until the patient happens to look.
+    Whoever did not send it is the recipient — the same code serves a doctor
+    opening the chat and a patient replying.
+    """
+    patient_sent = message.sender_id == appointment.patient_id
+    if patient_sent:
+        recipient = _provider_user_for(appointment)
+        sender_label = appointment.patient.name
+    else:
+        recipient = appointment.patient
+        sender_label = f"Dr. {appointment.doctor.provider.name}"
+    if not recipient:
+        return
+    notify(
+        recipient,
+        NotificationType.CONSULTATION_MESSAGE,
+        sender_label,
+        _consultation_message_preview(message),
+        data={
+            "appointment_id": appointment.pk,
+            "message_id": message.pk,
+            "consultation_mode": appointment.consultation_mode,
+            "patient_name": appointment.patient.name,
+        },
+    )
+
+
 class ConsultationMessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source="sender.name", read_only=True)
     # Which side of the thread the bubble sits on. Derived rather than stored:
@@ -2492,6 +2722,7 @@ class ConsultationMessagesAPIView(APIView):
         serializer = ConsultationMessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         message = serializer.save(appointment=appointment, sender=request.user)
+        _notify_consultation_message(appointment, message)
         return Response(
             ConsultationMessageSerializer(message).data,
             status=status.HTTP_201_CREATED,

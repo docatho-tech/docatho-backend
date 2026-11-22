@@ -26,6 +26,9 @@ class NotificationType(models.TextChoices):
     # the partner app turns into a join button.
     APPOINTMENT_WAITING = "appointment_waiting", _("Patient waiting in room")
     APPOINTMENT_RATED = "appointment_rated", _("Appointment rated")
+    # A line in the consultation thread. Its own type because the apps route it
+    # to the chat screen, not to the appointment detail.
+    CONSULTATION_MESSAGE = "consultation_message", _("New consultation message")
     DIAG_BOOKING_REQUESTED = "diag_booking_requested", _("Diagnostic booking requested")
     DIAG_BOOKING_CONFIRMED = "diag_booking_confirmed", _("Diagnostic booking confirmed")
     DIAG_BOOKING_CANCELLED = "diag_booking_cancelled", _("Diagnostic booking cancelled")

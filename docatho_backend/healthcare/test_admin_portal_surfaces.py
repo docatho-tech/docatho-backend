@@ -24,6 +24,7 @@ from docatho_backend.masters.buckets import APPOINTMENT_BUCKETS
 from docatho_backend.masters.buckets import BOOKING_BUCKETS
 from docatho_backend.masters.buckets import ORDER_BUCKETS
 from docatho_backend.masters.buckets import TICKET_BUCKETS
+from docatho_backend.notifications.models import NotificationType
 from docatho_backend.orders.models import Order
 from docatho_backend.orders.models import Payout
 from docatho_backend.orders.models import PayoutStatus
@@ -95,6 +96,27 @@ def test_consultation_thread_hidden_from_an_unrelated_patient(auth_client):
     )
     assert posted.status_code == 404
     assert appointment.messages.count() == 0
+
+
+def test_a_doctors_message_notifies_the_patient(auth_client):
+    appointment = _appointment()
+    doctor_user = appointment.doctor.provider.user
+
+    sent = auth_client(doctor_user).post(
+        f"/api/healthcare/appointments/{appointment.pk}/messages/",
+        {"kind": ConsultationMessageKind.TEXT, "body": "Please share yesterday's report."},
+        format="json",
+    )
+    assert sent.status_code == 201, sent.data
+
+    # The patient is not in the app when the doctor opens the chat, so the
+    # notification is the only thing that brings them to it.
+    note = appointment.patient.notifications.get()
+    assert note.notification_type == NotificationType.CONSULTATION_MESSAGE
+    assert note.body == "Please share yesterday's report."
+    assert note.data["appointment_id"] == appointment.pk
+    # The sender never gets their own message back as a notification.
+    assert doctor_user.notifications.count() == 0
 
 
 def test_empty_text_message_is_refused(auth_client):

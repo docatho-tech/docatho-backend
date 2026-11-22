@@ -17,6 +17,7 @@ import logging
 from abc import ABC
 from abc import abstractmethod
 
+import requests
 from django.conf import settings
 from django.utils.module_loading import import_string
 
@@ -46,6 +47,101 @@ class ConsoleNotificationService(NotificationService):
             notification.title,
         )
         return True
+
+
+#: Expo's push gateway. It relays to FCM/APNs using the credentials held by the
+#: Expo project, which is why this backend needs no service-account file on the
+#: server — the only secret involved is optional (``EXPO_ACCESS_TOKEN``).
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+#: Expo issues tokens in these two shapes. A *native* FCM/APNs token is not
+#: interchangeable with them: the gateway rejects it. The apps used to register
+#: native tokens, so rows predating that change are skipped rather than sent and
+#: silently dropped.
+_EXPO_TOKEN_PREFIXES = ("ExponentPushToken[", "ExpoPushToken[")
+
+
+class ExpoPushNotificationService(NotificationService):
+    """Deliver through Expo's push gateway to every device the user registered.
+
+    Returns True only if the gateway accepted at least one ticket, so a user
+    whose every token has gone stale is not recorded as notified.
+    """
+
+    def send(self, notification: Notification) -> bool:
+        # Imported here: the module is loaded by settings-time code paths that
+        # must not pull in models.
+        from .models import DeviceToken
+
+        tokens = [
+            token
+            for token in DeviceToken.objects.filter(
+                user_id=notification.recipient_id,
+            ).values_list("token", flat=True)
+            if token.startswith(_EXPO_TOKEN_PREFIXES)
+        ]
+        if not tokens:
+            logger.info(
+                "[notification] no Expo token for user=%s, id=%s not pushed",
+                notification.recipient_id,
+                notification.pk,
+            )
+            return False
+
+        # `data` is what the app routes on when the notification is tapped, and
+        # the type has to travel with it — the payload itself only carries the
+        # ids of whatever the notification is about.
+        data = dict(notification.data or {})
+        data["type"] = notification.notification_type
+        if notification.order_id:
+            data.setdefault("order_id", notification.order_id)
+
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        access_token = getattr(settings, "EXPO_ACCESS_TOKEN", "")
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        messages = [
+            {
+                "to": token,
+                "title": notification.title,
+                "body": notification.body,
+                "data": data,
+                "sound": "default",
+                "priority": "high",
+                # Android needs a channel the app has created, or the
+                # notification arrives with no sound and no heads-up banner.
+                "channelId": "default",
+            }
+            for token in tokens
+        ]
+
+        response = requests.post(
+            EXPO_PUSH_URL,
+            json=messages,
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        tickets = response.json().get("data") or []
+        delivered = 0
+        for ticket, token in zip(tickets, tokens, strict=False):
+            if ticket.get("status") == "ok":
+                delivered += 1
+                continue
+            details = (ticket.get("details") or {}).get("error")
+            logger.warning(
+                "[notification] Expo rejected id=%s: %s (%s)",
+                notification.pk,
+                ticket.get("message"),
+                details,
+            )
+            # The device uninstalled or reinstalled the app. Keeping the row
+            # means every later notification pays for a ticket that can only
+            # fail, so the token goes.
+            if details == "DeviceNotRegistered":
+                DeviceToken.objects.filter(token=token).delete()
+        return delivered > 0
 
 
 _DEFAULT_BACKEND = "docatho_backend.notifications.services.ConsoleNotificationService"

@@ -102,6 +102,11 @@ urlpatterns = [
         name="provider-availability",
     ),
     path(
+        "provider/blocked-dates/",
+        views.ProviderBlockedDatesAPIView.as_view(),
+        name="provider-blocked-dates",
+    ),
+    path(
         "provider/appointments/",
         views.ProviderAppointmentListAPIView.as_view(),
         name="provider-appointments",
