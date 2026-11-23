@@ -14,6 +14,7 @@ import pytest
 from django.utils import timezone
 
 from docatho_backend.healthcare.models import Appointment
+from docatho_backend.healthcare.models import AppointmentPaymentStatus
 from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import ConsultationMessageKind
 from docatho_backend.healthcare.models import ConsultationMode
@@ -40,12 +41,20 @@ pytestmark = pytest.mark.django_db
 
 
 def _appointment(patient=None, doctor=None) -> Appointment:
+    """A paid, confirmed consultation whose slot is now.
+
+    The thread's write gate (`consultation_chat_is_open`) only opens 15 minutes
+    before the slot on a paid, non-terminal appointment, so these tests — which
+    are about who can reach the thread, not when — book it for now.
+    """
     return Appointment.objects.create(
         patient=patient or UserFactory(),
         doctor=doctor or DoctorProfileFactory(),
-        scheduled_at=timezone.now() + timedelta(days=1),
+        scheduled_at=timezone.now(),
         consultation_mode=ConsultationMode.ONLINE,
         fee=Decimal("699.00"),
+        payment_status=AppointmentPaymentStatus.PAID,
+        status=AppointmentStatus.CONFIRMED,
     )
 
 

@@ -27,6 +27,45 @@ def appointment_in_call_window(appointment: Appointment) -> bool:
     return start <= now <= end
 
 
+#: How long after a consultation closes its thread stays writable, so a
+#: follow-up question the same evening still reaches the doctor.
+CHAT_WINDOW_AFTER_COMPLETION = timedelta(hours=24)
+
+
+def consultation_chat_is_open(appointment: Appointment) -> bool:
+    """Whether either side may still post to this appointment's thread.
+
+    Lives beside the call window because it is the same window: the thread
+    opens with the room, 15 minutes before the slot. The client had this rule
+    off the device clock and the server had none at all, so a patient could
+    message on a pending, rejected, cancelled or unpaid appointment, and
+    forever after it finished — each one pushing the doctor.
+
+    Zero-fee consultations are marked paid without the gateway
+    (``settle_free_appointment``), so the payment check does not shut them out.
+    """
+    if appointment.status in (
+        AppointmentStatus.PENDING,
+        AppointmentStatus.REJECTED,
+        AppointmentStatus.CANCELLED,
+    ):
+        return False
+    if appointment.payment_status != AppointmentPaymentStatus.PAID:
+        return False
+    if not appointment.scheduled_at:
+        return False
+
+    now = timezone.now()
+    if now < appointment.scheduled_at - CALL_WINDOW_BEFORE:
+        return False
+    if (
+        appointment.completed_at
+        and now > appointment.completed_at + CHAT_WINDOW_AFTER_COMPLETION
+    ):
+        return False
+    return True
+
+
 def patient_can_join_video(appointment: Appointment) -> bool:
     if appointment.consultation_mode != "online":
         return False

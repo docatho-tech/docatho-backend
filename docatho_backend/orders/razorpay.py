@@ -100,17 +100,24 @@ class RazorpayClient:
         razorpay_payment_id: str,
         razorpay_signature: str | None = None,
         raw_response: dict[str, Any] | None = None,
+        user=None,
     ) -> Transaction:
         """
         Mark a Transaction as succeeded after verifying signature.
         Updates linked Order.payment_status to PAID.
         Raises ValueError on verification failure or if matching transaction/order not found.
+
+        ``user`` scopes the lookup to that account's own orders. The gateway
+        triple is not a secret between patients — without the filter, anyone
+        holding one got the other patient's order back, name, phone, address
+        and medicines included. Only the webhook (no user) may go unscoped.
         """
-        tr = (
-            Transaction.objects.select_for_update()
-            .filter(transaction_order_id=razorpay_order_id)
-            .first()
+        qs = Transaction.objects.select_for_update().filter(
+            transaction_order_id=razorpay_order_id,
         )
+        if user is not None:
+            qs = qs.filter(order__user=user)
+        tr = qs.first()
         if tr is None:
             raise ValueError("No Transaction found for given razorpay_order_id")
 
@@ -201,6 +208,55 @@ class RazorpayClient:
                 tr = Transaction.objects.filter(
                     razorpay_payment_id=rp_payment_id,
                 ).first()
+
+            # Appointments keep their ledger in AppointmentPaymentTransaction,
+            # so every appointment payment used to reach the acknowledge-and-
+            # ignore branch below and nothing reconciled it: confirm-payment
+            # runs on a 10s client timeout, so a confirm that dropped after
+            # Razorpay captured the money left the appointment pending forever
+            # with the patient charged. This is the reconciliation.
+            # Only captures are reconciled here — a late `payment.failed` from
+            # an abandoned earlier attempt must not unpay a consultation the
+            # patient went on to pay for, exactly as it must not for an order —
+            # so failures fall through to the no-op below.
+            if tr is None and event == "payment.captured":
+                # Imported here, not at module scope: healthcare's payment
+                # helpers import this module, so a top-level import is circular.
+                from docatho_backend.healthcare.appointment_payments import (
+                    settle_appointment_payment,
+                )
+                from docatho_backend.healthcare.models import (
+                    AppointmentPaymentTransaction,
+                )
+
+                appt_tr = None
+                if rp_order_id:
+                    appt_tr = AppointmentPaymentTransaction.objects.filter(
+                        transaction_order_id=rp_order_id,
+                    ).first()
+                if appt_tr is None:
+                    # `create_appointment_checkout` stamps `appointment_id` into
+                    # the order's notes, which Razorpay echoes on the payment.
+                    appointment_id = (payment_entity.get("notes") or {}).get(
+                        "appointment_id",
+                    )
+                    if appointment_id:
+                        appt_tr = (
+                            AppointmentPaymentTransaction.objects.filter(
+                                appointment_id=appointment_id,
+                                succeeded=False,
+                            )
+                            .order_by("-created_at")
+                            .first()
+                        )
+                if appt_tr is not None:
+                    settle_appointment_payment(
+                        appt_tr,
+                        rp_payment_id or "",
+                        raw_response=payment_entity,
+                    )
+                    return payload
+
             # No Transaction row means this payment is not a pharmacy order —
             # appointment checkouts keep their own ledger. Acknowledge it rather
             # than inventing a Transaction with no Order (the FK is NOT NULL, so
@@ -228,6 +284,11 @@ class RazorpayClient:
                     order.save(
                         update_fields=["payment_status", "status", "updated_at"],
                     )
+                    # Imported here, not at module scope: views imports this
+                    # module, and settlement reaches back into orders.
+                    from .settlement import settle_paid_order
+
+                    settle_paid_order(order)
                 elif event == "payment.failed" and not already_paid:
                     # A late failure from an earlier attempt must not unpay an
                     # order the patient went on to pay for.

@@ -37,6 +37,7 @@ from .models import PayoutStatus
 from .models import Prescription
 from .models import Transaction
 from .razorpay import RazorpayClient
+from .settlement import settle_paid_order
 
 
 # --------------------------------------------------------------------------- #
@@ -211,6 +212,22 @@ class UpdateOrderStatusSerializer(serializers.Serializer):
         order.save(update_fields=[*written, "updated_at"])
 
 
+class CustomerUpdateOrderStatusSerializer(serializers.Serializer):
+    """Statuses a customer is allowed to drive on their own order.
+
+    `UpdateOrderStatusSerializer` accepts every `Order.Status` because the
+    provider and admin queues legitimately move an order through the whole
+    fulfilment lifecycle. On the customer endpoint that was an open door:
+    `delivered` is what `analytics` reads as realised revenue and books a
+    provider earning against, so a customer could mark an uncollected COD
+    order delivered and leave the platform owing the pharmacy cash it never
+    received. Cancelling is the only transition a customer actually needs.
+    """
+
+    status = serializers.ChoiceField(choices=[Order.Status.CANCELLED])
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
 class AssignProviderSerializer(serializers.Serializer):
     provider_id = serializers.IntegerField()
 
@@ -321,10 +338,24 @@ class OrderViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["patch"], url_path="update-status")
     def update_status(self, request, pk=None):
-        """Customer-initiated status changes (e.g. cancel their own order)."""
+        """Customer-initiated status changes: cancelling their own order.
+
+        Deliberately narrower than the provider/admin endpoint — see
+        `CustomerUpdateOrderStatusSerializer`.
+        """
         order = get_object_or_404(Order, pk=pk, user=request.user)
-        serializer = UpdateOrderStatusSerializer(data=request.data)
+        serializer = CustomerUpdateOrderStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if order.status not in Order.CUSTOMER_CANCELLABLE_STATUSES:
+            return Response(
+                {
+                    "detail": (
+                        "This order can no longer be cancelled. "
+                        "Please contact support."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             order.update_status(
                 new_status=serializer.validated_data["status"],
@@ -533,6 +564,7 @@ class OrderViewSet(viewsets.ViewSet):
                 razorpay_payment_id=d["razorpay_payment_id"],
                 razorpay_signature=d["razorpay_signature"],
                 raw_response=None,
+                user=request.user,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -543,29 +575,7 @@ class OrderViewSet(viewsets.ViewSet):
             )
 
         if tr.succeeded:
-            order = tr.order
-            try:
-                order.reserve_stock()
-            except ValueError:
-                # Payment already captured; flag the shortage for ops instead of
-                # failing the confirmation.
-                order.update_status(
-                    Order.Status.PROCESSING,
-                    notes="Stock shortage after payment; needs manual review.",
-                )
-            try:
-                cart = Cart.objects.filter(user=order.user).first()
-                if cart and cart.items.exists():
-                    cart.clear()
-            except Exception:
-                pass
-            notify(
-                order.user,
-                NotificationType.PAYMENT,
-                "Payment received",
-                f"We received your payment for order {order.order_number}.",
-                order=order,
-            )
+            settle_paid_order(tr.order)
 
         return Response(
             {

@@ -88,6 +88,11 @@ class Order(BaseModel):
     # Statuses that free previously reserved stock.
     STOCK_RELEASING_STATUSES = frozenset({"rejected", "cancelled", "returned"})
 
+    # Statuses a customer may still cancel from: everything before the order
+    # physically leaves the pharmacy. Once it is packed, cancellation is a
+    # support/return matter, not a self-service one.
+    CUSTOMER_CANCELLABLE_STATUSES = frozenset({"placed", "confirmed", "approved"})
+
     order_number = models.CharField(max_length=64, unique=True, db_index=True)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

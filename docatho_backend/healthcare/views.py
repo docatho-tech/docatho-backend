@@ -27,6 +27,7 @@ from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import MethodNotAllowed
 from rest_framework.generics import ListAPIView
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from rest_framework.parsers import FormParser
@@ -75,6 +76,7 @@ from docatho_backend.healthcare.models import SupportTicket
 from docatho_backend.healthcare.models import VerificationStatus
 from docatho_backend.healthcare.models import WishlistItem
 from docatho_backend.healthcare.video import mint_video_token
+from docatho_backend.healthcare.video import consultation_chat_is_open
 from docatho_backend.healthcare.video import patient_can_join_video
 from docatho_backend.healthcare.video import provider_can_join_video
 from docatho_backend.masters.buckets import APPOINTMENT_BUCKETS
@@ -1374,6 +1376,12 @@ class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
 
 class AppointmentViewSet(viewsets.ModelViewSet):
     pagination_class = GenericPaginationClass
+    # No PUT: every client patches. DELETE stays only for the dashboard's
+    # "Delete consultation" action, and `destroy` below locks it to staff —
+    # deleting an appointment cascades away the consultation thread and the
+    # prescription, which a patient must not be able to do to their own
+    # medical record.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     # `patient` lets the admin dashboard show one patient's consultation
     # history without a bespoke endpoint; `doctor` does the same for the
     # doctor profile page, which reports that doctor's own consultation
@@ -1420,6 +1428,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if self.request.user.is_staff:
             return [IsAdmin()]
         return [IsCustomer()]
+
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.is_staff:
+            raise MethodNotAllowed(request.method)
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = Appointment.objects.select_related(
@@ -1846,6 +1859,10 @@ class DiagnosticBookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCustomer]
     serializer_class = DiagnosticBookingSerializer
     pagination_class = GenericPaginationClass
+    # A patient cancels by PATCHing the status; nothing calls DELETE or PUT
+    # here, and a booking carries its results, so it is not a client's to
+    # destroy. The dashboard deletes through `AdminDiagnosticBookingViewSet`.
+    http_method_names = ["get", "post", "patch", "head", "options"]
     filterset_fields = ["status", "kind"]
     ordering_fields = ["created_at", "scheduled_date"]
 
@@ -2719,6 +2736,18 @@ class ConsultationMessagesAPIView(APIView):
 
     def post(self, request, appointment_id: int):
         appointment = self._appointment_for(request, appointment_id)
+        # Reading the thread back is always allowed; writing to it is not.
+        if not request.user.is_staff and not consultation_chat_is_open(appointment):
+            return Response(
+                {
+                    "detail": (
+                        "This consultation's chat is closed. Replies open 15 "
+                        "minutes before the appointment and stay open for a "
+                        "day after it finishes."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = ConsultationMessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         message = serializer.save(appointment=appointment, sender=request.user)
