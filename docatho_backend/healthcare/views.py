@@ -1177,6 +1177,27 @@ def _notify_appointment_status_change(appointment, new_status):
             )
 
 
+def _notify_provider_appointment_cancelled(appointment):
+    """The patient dropped the slot, and the provider is the one who replans.
+
+    `_notify_appointment_status_change` is the doctor-initiated direction and
+    notifies the patient; this is the other way round. Nothing told the doctor
+    at all before, so a cancelled slot stayed blocked in their day.
+    """
+    provider_user = _provider_user_for(appointment)
+    if not provider_user:
+        return
+    when = _format_appointment_datetime(appointment)
+    reason = appointment.cancellation_reason
+    notify(
+        provider_user,
+        NotificationType.APPOINTMENT_CANCELLED,
+        f"{appointment.patient.name} cancelled their appointment",
+        f"{when} is free again." + (f" Reason: {reason}" if reason else ""),
+        data=_appointment_notification_data(appointment),
+    )
+
+
 def _booking_kind_for_provider(center) -> str:
     """Lab / imaging / home-care bookings follow the centre's provider type."""
     mapping = {
@@ -1608,13 +1629,21 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if appointment.status in (
             AppointmentStatus.COMPLETED,
             AppointmentStatus.CANCELLED,
+            AppointmentStatus.NO_SHOW,
+            # A consultation that has started is left, not cancelled: the
+            # doctor is in the room and the fee has been earned.
+            AppointmentStatus.IN_PROGRESS,
         ):
             return Response(
                 {"detail": "Cannot cancel."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         appointment.status = AppointmentStatus.CANCELLED
-        appointment.save(update_fields=["status", "updated_at"])
+        appointment.cancellation_reason = str(request.data.get("reason") or "")[:255]
+        appointment.save(
+            update_fields=["status", "cancellation_reason", "updated_at"]
+        )
+        _notify_provider_appointment_cancelled(appointment)
         return Response(AppointmentSerializer(appointment).data)
 
     @action(detail=True, methods=["post"])

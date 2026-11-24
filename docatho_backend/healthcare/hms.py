@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -16,6 +17,8 @@ from rest_framework import status
 from rest_framework.exceptions import APIException
 
 HMS_API_BASE = "https://api.100ms.live/v2"
+
+logger = logging.getLogger(__name__)
 
 
 def _b64url(data: bytes) -> str:
@@ -51,6 +54,22 @@ class HMSNotConfiguredError(APIException, RuntimeError):
         "Please contact support."
     )
     default_code = "hms_not_configured"
+
+
+class HMSUnavailableError(APIException, RuntimeError):
+    """100ms did not answer — an outage, not a misconfiguration.
+
+    Kept apart from `HMSNotConfiguredError` because the two need different
+    things done about them (wait vs. set the keys) and because a `requests`
+    failure used to escape as a bare 500, which the app reads as "try again
+    closer to your appointment time" — told to a patient who is already at it.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = (
+        "The video service is temporarily unavailable. Please try again in a moment."
+    )
+    default_code = "hms_unavailable"
 
 
 def mock_tokens_allowed() -> bool:
@@ -91,16 +110,35 @@ class HMSClient:
         }
         return _jwt_encode(payload, self.secret)
 
-    def create_room(self, name: str) -> dict[str, Any]:
+    def _post(self, path: str, **kwargs: Any) -> Any:
+        """POST to 100ms, turning every transport failure into a 503.
+
+        One chokepoint for both calls: a connection error, a timeout and a 4xx
+        from 100ms are all "video cannot start right now", and none of them is
+        this server's bug to report as a 500.
+        """
         token = self.management_token()
-        resp = requests.post(
-            f"{HMS_API_BASE}/rooms",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"name": name, "description": "Docatho consultation", "template_id": self.template_id},
-            timeout=20,
+        headers = {"Authorization": f"Bearer {token}", **kwargs.pop("headers", {})}
+        try:
+            resp = requests.post(
+                f"{HMS_API_BASE}{path}", headers=headers, timeout=20, **kwargs
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.warning("[hms] POST %s failed: %s", path, exc)
+            raise HMSUnavailableError from exc
+
+    def create_room(self, name: str) -> dict[str, Any]:
+        return self._post(
+            "/rooms",
+            headers={"Content-Type": "application/json"},
+            json={
+                "name": name,
+                "description": "Docatho consultation",
+                "template_id": self.template_id,
+            },
         )
-        resp.raise_for_status()
-        return resp.json()
 
     def room_codes(self, room_id: str) -> dict[str, str]:
         """Return {role: code} for a room, creating the codes if they don't exist.
@@ -109,16 +147,10 @@ class HMSClient:
         native apps don't use them — they join with `auth_token` — but they make
         a real call reachable from a browser, which is what the E2E suite needs.
         """
-        token = self.management_token()
-        resp = requests.post(
-            f"{HMS_API_BASE}/room-codes/room/{room_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=20,
-        )
-        resp.raise_for_status()
+        payload = self._post(f"/room-codes/room/{room_id}")
         return {
             entry["role"]: entry["code"]
-            for entry in resp.json().get("data", [])
+            for entry in payload.get("data", [])
             if entry.get("enabled", True)
         }
 
