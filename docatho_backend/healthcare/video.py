@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from .hms import HMSClient
 from .hms import HMSNotConfiguredError
+from .hms import mock_tokens_allowed
 from .models import Appointment
 from .models import AppointmentPaymentStatus
 from .models import AppointmentStatus
@@ -102,6 +103,10 @@ def ensure_video_room(appointment: Appointment) -> str:
         room = client.create_room(room_name)
         room_id = room.get("id") or room.get("room_id") or ""
     else:
+        # Raises when the mock is not allowed — before anything is written, so
+        # an unconfigured server does not leave a fake room id on the record.
+        if not mock_tokens_allowed():
+            raise HMSNotConfiguredError
         room_id = f"dev-room-{appointment.pk}"
 
     appointment.video_room_id = room_id
@@ -113,16 +118,15 @@ def mint_video_token(appointment: Appointment, *, user, role: str) -> dict:
     room_id = ensure_video_room(appointment)
     client = HMSClient()
     user_id = f"user-{user.pk}"
-    try:
-        token = (
-            client.auth_token(room_id, user_id, role)
-            if client.is_configured
-            else client.dev_mock_token(room_id, user_id, role)
-        )
-        mock = not client.is_configured
-    except HMSNotConfiguredError:
-        token = client.dev_mock_token(room_id, user_id, role)
-        mock = True
+    # No fallback: `dev_mock_token` refuses outside DEBUG, and the
+    # `HMSNotConfiguredError` it raises is a 503 the client can act on. Catching
+    # it here is what minted the unjoinable token in production.
+    token = (
+        client.auth_token(room_id, user_id, role)
+        if client.is_configured
+        else client.dev_mock_token(room_id, user_id, role)
+    )
+    mock = not client.is_configured
 
     if appointment.status == AppointmentStatus.CONFIRMED:
         appointment.status = AppointmentStatus.IN_PROGRESS

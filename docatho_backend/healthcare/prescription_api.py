@@ -27,6 +27,7 @@ from docatho_backend.healthcare.models import AppointmentPrescription
 from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import PrescriptionSource
 from docatho_backend.healthcare.prescriptions import store_prescription_pdf
+from docatho_backend.healthcare.private_media import signed_url
 from docatho_backend.masters.permissions import is_provider
 
 #: A prescription is the outcome of a consultation, so it cannot be written
@@ -82,8 +83,15 @@ class AppointmentPrescriptionSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "source", "document_url", "created_at", "updated_at")
 
     def get_document_url(self, obj) -> str:
+        """A link that works now and not for long.
+
+        Never the stored value for a private document: that is a key, and the
+        signature has to be minted per read. A row from before the private
+        storage existed holds a plain public URL, which `signed_url` passes
+        through unchanged — those documents stay exposed, see the migration note.
+        """
         if obj.document_url:
-            return obj.document_url
+            return signed_url(obj.document_url)
         if not obj.pdf:
             return ""
         request = self.context.get("request")

@@ -19,6 +19,8 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from docatho_backend.healthcare.private_media import signed_url
+from docatho_backend.healthcare.private_media import store_private
 from docatho_backend.masters.permissions import IsAdmin
 from docatho_backend.masters.permissions import IsProvider
 
@@ -73,6 +75,18 @@ class ImageUploadView(APIView):
             return Response(
                 {"detail": "That file is larger than 5 MB."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # A medical document — a prescription sheet, a lab report — goes to the
+        # private prefix instead, and is addressed by a `private:<key>`
+        # reference rather than a URL: a signed URL expires, so it must not be
+        # the thing that gets stored. `signed_url` is included so the client
+        # that just uploaded it can show it immediately.
+        if str(request.data.get("private", "")).lower() in ("1", "true", "yes"):
+            ref = store_private(upload, prefix="documents")
+            return Response(
+                {"url": ref, "key": ref, "signed_url": signed_url(ref)},
+                status=status.HTTP_201_CREATED,
             )
 
         # Never trust the client's filename as a path: it decides where the

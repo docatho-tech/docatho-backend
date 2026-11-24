@@ -19,7 +19,10 @@ from django.db.models import QuerySet
 APPOINTMENT_BUCKETS = {
     "upcoming": ["pending", "confirmed", "in_progress"],
     "completed": ["completed"],
-    "cancelled": ["cancelled", "rejected"],
+    # A no-show sits with the cancelled ones, not the completed ones: the
+    # consultation did not happen, and it must never be counted — or paid for —
+    # as one that did.
+    "cancelled": ["cancelled", "rejected", "no_show"],
 }
 
 #: Diagnostic booking statuses, grouped. Values match `DiagnosticBookingStatus`.

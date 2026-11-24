@@ -2,6 +2,7 @@
 from .base import *  # noqa: F403
 from .base import DATABASES
 from .base import INSTALLED_APPS
+from .base import PRIVATE_S3_STORAGE
 from .base import RAZORPAY_KEY_ID
 from .base import RAZORPAY_KEY_SECRET
 from .base import RAZORPAY_WEBHOOK_SECRET
@@ -110,6 +111,9 @@ STORAGES = {
             # AccessControlListNotSupported. The bucket policy grants the read.
         },
     },
+    # Prescriptions and lab reports. Own prefix, signed URLs — see the note in
+    # base.py and `healthcare/private_media.py`.
+    "private": PRIVATE_S3_STORAGE,
 }
 MEDIA_URL = f"https://{aws_s3_domain}/media/"
 COLLECTFASTA_STRATEGY = "collectfasta.strategies.boto3.Boto3Strategy"

@@ -1,7 +1,6 @@
 from decimal import Decimal
 from uuid import uuid4
 
-from django.conf import settings
 from django.db import transaction as db_transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -19,6 +18,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from docatho_backend.cart.models import Cart
+from docatho_backend.cart.models import order_quote
 from docatho_backend.masters.buckets import ORDER_BUCKETS
 from docatho_backend.masters.buckets import apply_bucket
 from docatho_backend.masters.permissions import IsAdmin
@@ -435,6 +435,48 @@ class OrderViewSet(viewsets.ViewSet):
                     {"detail": "Invalid prescription."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # A document a pharmacist already rejected is not a prescription.
+            # Accepting it produced an order that could never be fulfilled.
+            if prescription.status == Prescription.Status.REJECTED:
+                return Response(
+                    {
+                        "detail": "That prescription was rejected. "
+                        "Please upload a valid one.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # --- Prices must still be the catalogue's -------------------------- #
+        # Cart rows snapshot the price at the moment the item went in. Checking
+        # out against a stale snapshot either overcharges the patient or shorts
+        # the pharmacy, both silently. Re-price the cart and make them look at
+        # the new total rather than moving money on a figure nobody agreed to.
+        repriced = []
+        for ci in cart_items:
+            live_price = ci.medicine.price or Decimal("0.00")
+            live_mrp = ci.medicine.mrp or live_price
+            if ci.unit_price != live_price or ci.mrp != live_mrp:
+                repriced.append(
+                    {
+                        "name": ci.medicine.name,
+                        "old_price": str(ci.unit_price),
+                        "new_price": str(live_price),
+                    },
+                )
+                ci.unit_price = live_price
+                ci.mrp = live_mrp
+                ci.save(update_fields=["unit_price", "mrp", "updated_at"])
+        if repriced:
+            cart.recalculate()
+            return Response(
+                {
+                    "detail": "Prices for some items in your cart have changed. "
+                    "Please review the updated total and place the order again.",
+                    "price_changed": True,
+                    "items": repriced,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         # --- Stock availability (soft check before creating the order) ---- #
         shortages = [
@@ -503,15 +545,11 @@ class OrderViewSet(viewsets.ViewSet):
 
             order.recalc_totals()
 
-            # Server-controlled money rules.
-            discount_percent = Decimal(str(settings.PHARMACY_ORDER_DISCOUNT_PERCENT))
-            discount_amount = (
-                order.subtotal * (discount_percent / Decimal("100"))
-            ).quantize(Decimal("0.01"))
-            order.discount_amount = min(discount_amount, order.subtotal)
-            order.delivery_fee = Decimal(str(settings.PHARMACY_DELIVERY_FEE)).quantize(
-                Decimal("0.01"),
-            )
+            # Server-controlled money rules — the same function the cart screen
+            # is quoted from, so the two can never disagree.
+            quote = order_quote(order.subtotal)
+            order.discount_amount = quote["order_discount"]
+            order.delivery_fee = quote["delivery_fee"]
             order.recalc_totals()
             order.compute_commission()
 
@@ -520,10 +558,12 @@ class OrderViewSet(viewsets.ViewSet):
                 try:
                     order.reserve_stock()
                 except ValueError as exc:
-                    return Response(
-                        {"detail": str(exc)},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    # Raised, not returned: `return` inside an atomic block
+                    # commits it, so a COD checkout that hit a shortage used to
+                    # answer 400 and still leave a real order behind — stock
+                    # never deducted, cart never emptied, and the row sitting in
+                    # the pharmacy's queue. Raising rolls the order back.
+                    raise serializers.ValidationError({"detail": str(exc)}) from exc
                 cart.clear()
                 rp_order = None
             else:

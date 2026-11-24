@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -262,3 +263,31 @@ def test_video_token_after_payment():
     assert res.status_code == 200
     assert "auth_token" in res.data
     assert res.data["appointment_id"] == appt.pk
+
+
+def test_unconfigured_video_503s_instead_of_minting_a_fake_token():
+    """Production with no 100ms env used to hand the app a token no room
+    accepts, and the failure read as "the video call is broken"."""
+    patient = UserFactory()
+    doctor = DoctorProfileFactory()
+    appt = Appointment.objects.create(
+        patient=patient,
+        doctor=doctor,
+        scheduled_at=timezone.now() + timedelta(minutes=10),
+        consultation_mode=ConsultationMode.ONLINE,
+        status=AppointmentStatus.CONFIRMED,
+        fee=500,
+        payment_method="online",
+        payment_status=AppointmentPaymentStatus.PAID,
+    )
+    client = APIClient()
+    client.force_authenticate(user=patient)
+
+    with override_settings(HMS_ALLOW_MOCK_TOKENS=False):
+        res = client.post(f"/api/healthcare/appointments/{appt.pk}/video-token/")
+
+    assert res.status_code == 503
+    assert "not configured" in str(res.data["detail"])
+    # Nothing half-done: no fake room id left on the record.
+    appt.refresh_from_db()
+    assert appt.video_room_id == ""

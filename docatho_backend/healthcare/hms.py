@@ -12,6 +12,8 @@ from typing import Any
 
 import requests
 from django.conf import settings
+from rest_framework import status
+from rest_framework.exceptions import APIException
 
 HMS_API_BASE = "https://api.100ms.live/v2"
 
@@ -32,8 +34,28 @@ def _jwt_encode(payload: dict[str, Any], secret: str) -> str:
     return ".".join(segments)
 
 
-class HMSNotConfiguredError(RuntimeError):
-    pass
+class HMSNotConfiguredError(APIException, RuntimeError):
+    """100ms cannot answer, and the request that needed it must say so.
+
+    `APIException` first in the bases so DRF's own `__init__` (the one that
+    sets `detail`) wins the MRO; still a `RuntimeError` for the callers that
+    catch it as one. Also an `APIException` with a 503, so the two video-token endpoints turn it
+    into an honest "video is not configured" rather than handing the app a
+    token no room will accept. Raised per request — never at import time and
+    never at startup: a missing key must break video, not the whole API.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = (
+        "Video consultations are not configured on this server. "
+        "Please contact support."
+    )
+    default_code = "hms_not_configured"
+
+
+def mock_tokens_allowed() -> bool:
+    """Whether a fake, unjoinable token may stand in for a real one."""
+    return bool(getattr(settings, "HMS_ALLOW_MOCK_TOKENS", settings.DEBUG))
 
 
 class HMSClient:
@@ -124,6 +146,14 @@ class HMSClient:
         return _jwt_encode(payload, self.secret)
 
     def dev_mock_token(self, room_id: str, user_id: str, role: str) -> str:
+        """A token that joins nothing. Development only — see `mock_tokens_allowed`.
+
+        This used to be the silent fallback for blank credentials, so a
+        production server with no 100ms env handed both apps a token the SDK
+        rejects, and the failure surfaced as "the video call is broken".
+        """
+        if not mock_tokens_allowed():
+            raise HMSNotConfiguredError
         return _jwt_encode(
             {"mock": True, "room_id": room_id, "user_id": user_id, "role": role, "exp": int(time.time()) + 3600},
             "docatho-dev-secret",

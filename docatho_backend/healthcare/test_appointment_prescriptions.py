@@ -11,12 +11,14 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from django.core.files.storage import storages
 from django.utils import timezone
 
 from docatho_backend.healthcare.models import Appointment
 from docatho_backend.healthcare.models import AppointmentPrescription
 from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import PrescriptionSource
+from docatho_backend.healthcare.private_media import signed_url
 from docatho_backend.testing.factories import DoctorProfileFactory
 from docatho_backend.testing.factories import UserFactory
 
@@ -152,3 +154,39 @@ def test_the_patient_reads_the_prescription_off_their_appointment(auth_client):
     assert auth_client(appointment.patient).post(
         _url(appointment.pk), FORM, format="json",
     ).status_code == 404
+
+
+def test_the_pdf_lands_on_the_private_storage(auth_client):
+    """A prescription is a named patient's diagnosis. It must not be one of the
+    permanently public URLs the product uses for product photos."""
+    doctor = DoctorProfileFactory()
+    appointment = _appointment(doctor)
+
+    resp = auth_client(doctor.provider.user).post(
+        _url(appointment.id),
+        {"diagnosis": "Viral fever", "medications": []},
+        format="json",
+    )
+
+    assert resp.status_code in (200, 201), resp.data
+    prescription = AppointmentPrescription.objects.get()
+    assert storages["private"].exists(prescription.pdf.name)
+    assert not storages["default"].exists(prescription.pdf.name)
+
+
+def test_an_uploaded_document_is_re_signed_on_every_read(auth_client):
+    """The stored value is a key, not a URL: a signed URL expires, so it must
+    never be what is persisted."""
+    doctor = DoctorProfileFactory()
+    appointment = _appointment(doctor)
+    prescription = AppointmentPrescription.objects.create(
+        appointment=appointment,
+        source=PrescriptionSource.UPLOADED,
+        document_url="private:documents/deadbeef.pdf",
+    )
+
+    resp = auth_client(doctor.provider.user).get(_url(appointment.id))
+
+    assert resp.status_code == 200
+    assert resp.data["document_url"] != prescription.document_url
+    assert resp.data["document_url"] == signed_url(prescription.document_url)

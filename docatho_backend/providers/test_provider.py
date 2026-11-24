@@ -29,13 +29,15 @@ def test_non_provider_cannot_access_queue(auth_client):
 
 def test_provider_can_approve_assigned_order(auth_client):
     provider = ProviderFactory()
-    order = OrderFactory(assigned_provider=provider)
+    # COD: an online order is not approvable until its payment succeeds, which
+    # is a separate rule tested in orders/test_money_guards.py.
+    order = OrderFactory(assigned_provider=provider, payment_method="cod")
     resp = auth_client(provider.user).patch(
         f"/api/providers/chemist-order-update/{order.id}/",
         {"status": "approved"},
         format="json",
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.data
     order.refresh_from_db()
     assert order.status == "approved"
 

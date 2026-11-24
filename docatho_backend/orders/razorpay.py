@@ -67,6 +67,31 @@ class RazorpayClient:
         )
         return data
 
+    def refund(
+        self,
+        razorpay_payment_id: str,
+        amount: Decimal,
+        notes: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return ``amount`` of a captured payment to the payer.
+
+        Amount is sent in paisa, like every other figure the gateway takes.
+        Raises on a non-2xx so the caller can record the failure.
+        """
+        amount_paisa = int((Decimal(amount) * 100).to_integral_value())
+        resp = requests.post(
+            f"{RAZORPAY_API_BASE}/payments/{razorpay_payment_id}/refund",
+            auth=self._auth(),
+            json={
+                "amount": amount_paisa,
+                "speed": "normal",
+                "notes": notes or {},
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     @staticmethod
     def _verify_signature(message: bytes, signature: str, secret: str) -> bool:
         # A blank secret still produces a valid HMAC, one anybody can compute,

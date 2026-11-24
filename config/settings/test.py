@@ -45,6 +45,10 @@ STORAGES = {
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
+    # Same reasoning for the medical-document storage: in memory, never the
+    # live bucket. It is a separate alias so a test can assert a prescription
+    # went to the private storage rather than the public one.
+    "private": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
 }
 # 100ms
 # ------------------------------------------------------------------------------
@@ -57,6 +61,10 @@ STORAGES = {
 HMS_APP_ACCESS_KEY = ""
 HMS_APP_SECRET = ""
 HMS_TEMPLATE_ID = ""
+# With the keys blanked, minting a token is only possible at all because the
+# mock is explicitly allowed here. Production leaves this off and the request
+# 503s instead — `test_video_consultation.py` covers both sides.
+HMS_ALLOW_MOCK_TOKENS = True
 
 # Your stuff...
 # ------------------------------------------------------------------------------

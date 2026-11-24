@@ -14,7 +14,10 @@ pytestmark = pytest.mark.django_db
 
 
 def test_new_lifecycle_statuses_are_valid():
-    order = OrderFactory()
+    # COD: an *online* order is not fulfillable until its payment succeeds, so
+    # a pending-payment online order here would be testing the money guard
+    # rather than whether these statuses are accepted at all.
+    order = OrderFactory(payment_method=Order.PaymentMethod.COD)
     for st in ("approved", "rejected", "packed"):
         order.update_status(st)
         order.refresh_from_db()
@@ -92,7 +95,7 @@ def test_customer_only_sees_own_orders(auth_client):
 
 def test_admin_status_update_notifies_customer(auth_client):
     admin = AdminUserFactory()
-    order = OrderFactory()
+    order = OrderFactory(payment_method=Order.PaymentMethod.COD)
     client = auth_client(admin)
     resp = client.patch(
         f"/api/admin/orders/{order.id}/update-status/",

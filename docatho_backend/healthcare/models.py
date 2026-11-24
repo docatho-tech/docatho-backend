@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
+from docatho_backend.healthcare.private_media import private_storage
 from docatho_backend.masters.models import BaseModel
 from docatho_backend.medicines.models import Medicine
 from docatho_backend.providers.models import Provider
@@ -194,6 +198,60 @@ class AppointmentStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "In Progress"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
+    # Nobody turned up. Stored apart from `completed` because the two differ on
+    # money — a no-show earns no consultation fee — and apart from `cancelled`
+    # because nobody called it off.
+    NO_SHOW = "no_show", "No show"
+
+
+#: Statuses that still hold a slot. Anything else — cancelled, rejected, a
+#: no-show — frees it, which is why the unique constraint below is conditional
+#: and why `_validate_slot` and the booked-slot list must agree with it. One
+#: definition: two would drift and start offering slots the constraint refuses.
+LIVE_APPOINTMENT_STATUSES = (
+    AppointmentStatus.PENDING,
+    AppointmentStatus.CONFIRMED,
+    AppointmentStatus.IN_PROGRESS,
+    AppointmentStatus.COMPLETED,
+)
+
+
+def live_appointments(doctor):
+    """This doctor's appointments that still hold their slot."""
+    return Appointment.objects.filter(
+        doctor=doctor,
+        status__in=LIVE_APPOINTMENT_STATUSES,
+    )
+
+
+def slot_is_taken(doctor, scheduled_at, *, exclude_pk=None) -> bool:
+    qs = live_appointments(doctor).filter(scheduled_at=scheduled_at)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    return qs.exists()
+
+
+#: How far ahead the booking screens let a patient pick. Past this there is
+#: nothing to grey out.
+BOOKABLE_HORIZON_DAYS = 60
+
+
+def booked_slots(doctor, *, days: int = BOOKABLE_HORIZON_DAYS) -> list[str]:
+    """ISO timestamps this doctor is no longer free at.
+
+    The clients cut `availability` (weekly opening hours) into slots, so the
+    only thing the API can say is which of those are gone. Same `live` set as
+    the unique constraint, so a slot that is offered is a slot that can be
+    booked.
+    """
+    now = timezone.now()
+    return [
+        at.isoformat()
+        for at in live_appointments(doctor)
+        .filter(scheduled_at__gte=now, scheduled_at__lt=now + timedelta(days=days))
+        .order_by("scheduled_at")
+        .values_list("scheduled_at", flat=True)
+    ]
 
 
 class AppointmentPaymentStatus(models.TextChoices):
@@ -256,6 +314,18 @@ class Appointment(BaseModel):
 
     class Meta:
         ordering = ["-scheduled_at"]
+        constraints = [
+            # Two patients could book the same doctor at the same instant: the
+            # serializer's existence check has no lock, so both reads saw a free
+            # slot. Only the database can refuse the second write. Conditional,
+            # because a cancelled or rejected booking must not block the slot
+            # being sold again.
+            models.UniqueConstraint(
+                fields=["doctor", "scheduled_at"],
+                condition=models.Q(status__in=LIVE_APPOINTMENT_STATUSES),
+                name="unique_live_appointment_per_doctor_slot",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"Appt #{self.pk} — {self.patient} / {self.doctor}"
@@ -390,14 +460,18 @@ class AppointmentPrescription(BaseModel):
     instructions = models.TextField(blank=True, default="")
     follow_up = models.CharField(max_length=255, blank=True, default="")
 
-    #: The rendered PDF, for a generated prescription.
+    #: The rendered PDF, for a generated prescription. On the private storage:
+    #: this is a named patient's diagnosis, so its URL has to expire. The
+    #: serializer signs one per read and never stores it.
     pdf = models.FileField(
         upload_to="prescriptions/appointments/%Y/%m/",
+        storage=private_storage,
         blank=True,
         null=True,
     )
-    #: An /api/uploads/ URL, for an uploaded one — the same way every other
-    #: document in the product is addressed.
+    #: For an uploaded one: either a ``private:<key>`` reference from
+    #: ``/api/uploads/?private=1`` (what new uploads write) or, for rows that
+    #: predate that, the public URL it was given then.
     document_url = models.CharField(max_length=500, blank=True, default="")
 
     class Meta:
