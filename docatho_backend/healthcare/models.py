@@ -855,11 +855,16 @@ class AIChatMessage(BaseModel):
     )
     role = models.CharField(max_length=20)
     content = models.TextField(blank=True)
-    # A voice note or a document the patient sent with (or instead of) text.
-    # Storage is the same public media bucket as everything else, so this is
-    # patient-recorded health detail sitting behind an unguessable but
-    # unauthenticated URL — see the media note in the deployment docs.
-    attachment = models.FileField(upload_to="ai_chat/", blank=True, null=True)
+    # A voice note or a document the patient sent with (or instead of) text —
+    # health detail they recorded about themselves, so it goes to the private
+    # storage and is read back through `stored_file_url`, which signs it per
+    # read. Rows from before that are still on the public prefix.
+    attachment = models.FileField(
+        upload_to="private/ai_chat/",
+        blank=True,
+        null=True,
+        storage=private_storage,
+    )
     attachment_kind = models.CharField(max_length=10, blank=True)  # audio | file
     attachment_name = models.CharField(max_length=255, blank=True)
     metadata = models.JSONField(default=dict, blank=True)

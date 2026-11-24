@@ -20,10 +20,18 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from django.core.files.storage import default_storage
 from django.core.files.storage import storages
 
 #: Marks a stored string as a key in the private bucket rather than a URL.
 PRIVATE_REF_PREFIX = "private:"
+
+#: Where a ``FileField`` that was moved onto the private storage puts its new
+#: uploads. A ``FileField`` keeps one storage for the whole column, but the rows
+#: written before the move are real objects on the *public* prefix — so the key
+#: itself has to say which bucket to read them from, and `stored_file_url` reads
+#: it. Without this, moving the column would 404 every document already on file.
+PRIVATE_PATH_PREFIX = "private/"
 
 
 def private_storage():
@@ -63,3 +71,25 @@ def signed_url(value: str | None) -> str:
     if not is_private_ref(value):
         return value
     return private_storage().url(private_key(value))
+
+
+def stored_file_url(field, request=None) -> str:
+    """A readable address for a ``FileField`` whose rows straddle the split.
+
+    New uploads live under `PRIVATE_PATH_PREFIX` in the private bucket and are
+    signed per read; anything older is on the public prefix and is read back
+    through the default storage, which is the only place those bytes are.
+
+    `request` is taken for the local-disk backend, which answers "/media/..." —
+    the clients are served from other origins, so a relative path 404s there.
+    """
+    if not field:
+        return ""
+    name = field.name or ""
+    if not name:
+        return ""
+    storage = (
+        private_storage() if name.startswith(PRIVATE_PATH_PREFIX) else default_storage
+    )
+    url = storage.url(name)
+    return request.build_absolute_uri(url) if request else url

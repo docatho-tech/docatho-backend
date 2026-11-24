@@ -19,6 +19,7 @@ from rest_framework.response import Response
 
 from docatho_backend.cart.models import Cart
 from docatho_backend.cart.models import order_quote
+from docatho_backend.healthcare.private_media import stored_file_url
 from docatho_backend.masters.buckets import ORDER_BUCKETS
 from docatho_backend.masters.buckets import apply_bucket
 from docatho_backend.masters.permissions import IsAdmin
@@ -48,6 +49,17 @@ class PrescriptionSerializer(serializers.ModelSerializer):
         model = Prescription
         fields = ("id", "image", "status", "notes", "created_at")
         read_only_fields = ("id", "status", "created_at")
+
+    def to_representation(self, instance):
+        """Answer a signed address, not the raw one DRF builds.
+
+        Overridden rather than swapped for a method field because `image` is
+        also how the file is uploaded — a read-only field here would take away
+        the write.
+        """
+        data = super().to_representation(instance)
+        data["image"] = stored_file_url(instance.image, self.context.get("request"))
+        return data
 
 
 class OrderItemSerializer(serializers.ModelSerializer):

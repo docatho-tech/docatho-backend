@@ -80,6 +80,7 @@ from docatho_backend.healthcare.models import WishlistItem
 from docatho_backend.healthcare.models import booked_slots
 from docatho_backend.healthcare.models import slot_is_taken
 from docatho_backend.healthcare.private_media import signed_url
+from docatho_backend.healthcare.private_media import stored_file_url
 from docatho_backend.healthcare.video import mint_video_token
 from docatho_backend.healthcare.video import consultation_chat_is_open
 from docatho_backend.healthcare.video import patient_can_join_video
@@ -376,11 +377,9 @@ class AdminAppointmentSerializer(AppointmentSerializer):
         claim that it came out of this consultation.
         """
         prescription = obj.patient.prescriptions.order_by("-created_at").first()
-        if prescription is None or not prescription.image:
+        if prescription is None:
             return ""
-        request = self.context.get("request")
-        url = prescription.image.url
-        return request.build_absolute_uri(url) if request else url
+        return stored_file_url(prescription.image, self.context.get("request"))
 
     def get_message_count(self, obj):
         return obj.messages.count()
@@ -2117,7 +2116,7 @@ class AIChatAPIView(APIView):
                 "source": result.source,
                 "metadata": result.metadata,
                 "attachment_url": (
-                    request.build_absolute_uri(user_message.attachment.url)
+                    stored_file_url(user_message.attachment, request)
                     if user_message.attachment
                     else None
                 ),
@@ -2178,7 +2177,7 @@ class AIChatSessionDetailAPIView(APIView):
                         "content": m.content,
                         "created_at": m.created_at,
                         "attachment_url": (
-                            request.build_absolute_uri(m.attachment.url)
+                            stored_file_url(m.attachment, request)
                             if m.attachment
                             else None
                         ),
@@ -2764,6 +2763,12 @@ class ConsultationMessageSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
+    def to_representation(self, instance):
+        """A `private:<key>` attachment is signed here, never stored signed."""
+        data = super().to_representation(instance)
+        data["attachment_url"] = signed_url(instance.attachment_url)
+        return data
+
     def validate(self, attrs):
         kind = attrs.get("kind", ConsultationMessageKind.TEXT)
         body = (attrs.get("body") or "").strip()
@@ -3101,9 +3106,7 @@ class AdminPrescriptionSerializer(serializers.ModelSerializer):
     def get_image_url(self, obj) -> str | None:
         if not obj.image:
             return None
-        request = self.context.get("request")
-        url = obj.image.url
-        return request.build_absolute_uri(url) if request else url
+        return stored_file_url(obj.image, self.context.get("request"))
 
     def get_order_count(self, obj) -> int:
         return obj.orders.count()

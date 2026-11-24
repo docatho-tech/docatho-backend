@@ -6,6 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from docatho_backend.healthcare.private_media import private_storage
 from docatho_backend.masters.models import BaseModel
 from docatho_backend.medicines.models import RX_REQUIRED_SCHEDULES
 from docatho_backend.medicines.models import Medicine
@@ -21,7 +22,10 @@ class Prescription(BaseModel):
     """A prescription document uploaded by a patient.
 
     Required to check out any medicine with ``is_prescription_required=True``.
-    Stored via the default storage backend (local in dev, S3 in production).
+    Stored privately: it carries a patient's name and the drugs they were
+    prescribed, so the address has to expire. Read it through
+    ``stored_file_url``, never ``image.url`` — rows uploaded before the move are
+    still on the public prefix.
     """
 
     class Status(models.TextChoices):
@@ -34,7 +38,10 @@ class Prescription(BaseModel):
         on_delete=models.CASCADE,
         related_name="prescriptions",
     )
-    image = models.FileField(upload_to="prescriptions/%Y/%m/")
+    image = models.FileField(
+        upload_to="private/prescriptions/%Y/%m/",
+        storage=private_storage,
+    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,

@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.core.files.storage import storages
 from django.utils import timezone
 
@@ -20,8 +21,12 @@ from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.prescription_api import (
     AppointmentPrescriptionSerializer,
 )
+from docatho_backend.healthcare.private_media import PRIVATE_PATH_PREFIX
 from docatho_backend.healthcare.private_media import PRIVATE_REF_PREFIX
 from docatho_backend.healthcare.private_media import signed_url
+from docatho_backend.healthcare.private_media import stored_file_url
+from docatho_backend.orders.models import Prescription
+from docatho_backend.orders.views import PrescriptionSerializer
 from docatho_backend.healthcare.reminders import send_due_reminders
 from docatho_backend.notifications.models import Notification
 from docatho_backend.notifications.models import NotificationType
@@ -174,3 +179,34 @@ def test_a_public_url_written_before_the_split_still_renders():
     """Documents already on the public prefix have to keep working."""
     legacy = "https://example.s3.amazonaws.com/media/documents/old.pdf"
     assert signed_url(legacy) == legacy
+
+
+@pytest.mark.django_db
+def test_a_patients_prescription_upload_lands_on_the_private_storage():
+    prescription = Prescription.objects.create(user=UserFactory())
+    prescription.image.save("rx.jpg", ContentFile(b"jpegbytes"), save=True)
+
+    assert prescription.image.storage is storages["private"], (
+        "a prescription names the patient and their drugs — not public storage"
+    )
+    assert prescription.image.name.startswith(PRIVATE_PATH_PREFIX), (
+        "the key has to say which bucket it is in, or legacy rows break"
+    )
+    # Served signed, and read through the helper rather than `.url`.
+    served = PrescriptionSerializer(prescription).data["image"]
+    assert served == stored_file_url(prescription.image)
+
+
+@pytest.mark.django_db
+def test_a_prescription_uploaded_before_the_move_still_reads_from_public():
+    """The bytes of an old row are only on the public prefix."""
+    prescription = Prescription.objects.create(user=UserFactory())
+    # No save() through the field: this is what the column already holds.
+    Prescription.objects.filter(pk=prescription.pk).update(
+        image="prescriptions/2026/11/old.jpg",
+    )
+    prescription.refresh_from_db()
+
+    assert stored_file_url(prescription.image) == default_storage.url(
+        "prescriptions/2026/11/old.jpg",
+    )
