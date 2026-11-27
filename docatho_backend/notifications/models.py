@@ -23,8 +23,16 @@ class NotificationType(models.TextChoices):
     APPOINTMENT_CANCELLED = "appointment_cancelled", _("Appointment cancelled")
     APPOINTMENT_REMINDER = "appointment_reminder", _("Appointment reminder")
     # The patient is in the room and the doctor is not — the one notification
-    # the partner app turns into a join button.
+    # the partner app turns into a join button. Kept for the rows already
+    # written: the doctor opens the room now, so nothing sends it any more.
     APPOINTMENT_WAITING = "appointment_waiting", _("Patient waiting in room")
+    # The doctor has opened the room, which is the only way a video
+    # consultation starts. Its own type because the patient app routes it to
+    # the call screen, not to the appointment detail.
+    CONSULTATION_CALL_STARTED = (
+        "consultation_call_started",
+        _("Doctor started the call"),
+    )
     APPOINTMENT_RATED = "appointment_rated", _("Appointment rated")
     # A line in the consultation thread. Its own type because the apps route it
     # to the chat screen, not to the appointment detail.

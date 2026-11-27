@@ -88,16 +88,18 @@ def test_full_online_appointment_journey_book_pay_video_complete_rate(
         scheduled_at=timezone.now() + timedelta(minutes=5),
     )
 
+    # The doctor opens the room, then the patient joins it — a patient who
+    # tries first is refused.
+    doctor_token = doc_client.post(
+        f"/api/healthcare/provider/appointments/{appt_id}/video-token/",
+    )
+    assert doctor_token.status_code == 200
+
     patient_token = patient_client.post(
         f"/api/healthcare/appointments/{appt_id}/video-token/"
     )
     assert patient_token.status_code == 200, patient_token.data
     assert patient_token.data["auth_token"]
-
-    doctor_token = doc_client.post(
-        f"/api/healthcare/provider/appointments/{appt_id}/video-token/",
-    )
-    assert doctor_token.status_code == 200
 
     completed = doc_client.patch(
         "/api/healthcare/provider/appointments/",

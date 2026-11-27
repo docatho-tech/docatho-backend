@@ -8,12 +8,15 @@ the doctor had blocked, and a slot another patient already had.
 from datetime import timedelta
 
 import pytest
+from django.db import IntegrityError
+from django.db import transaction
 from django.utils import timezone
 
 from docatho_backend.healthcare.models import Appointment
 from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import BlockedDate
 from docatho_backend.healthcare.models import DoctorAvailability
+from docatho_backend.healthcare.models import slot_is_taken
 from docatho_backend.testing.factories import DoctorProfileFactory
 from docatho_backend.testing.factories import UserFactory
 
@@ -135,3 +138,61 @@ def test_a_doctor_with_no_hours_stays_bookable(patient_client):
     doctor = DoctorProfileFactory(is_verified=True, consultation_modes=["online"])
     response = _book(patient_client, doctor, _next_local(3, 4))
     assert response.status_code == 201, response.data
+
+
+def test_the_database_refuses_a_second_live_booking_of_one_slot(
+    doctor_with_monday_hours,
+):
+    """The serializer's check can lose a race; the constraint cannot.
+
+    Two requests can both read a free slot before either writes, which is how
+    two patients ended up with the same doctor at the same minute.
+    """
+    when = _next_local(1, 10)
+
+    def book(status):
+        return Appointment.objects.create(
+            patient=UserFactory(),
+            doctor=doctor_with_monday_hours,
+            scheduled_at=when,
+            consultation_mode="online",
+            status=status,
+            fee=500,
+        )
+
+    book(AppointmentStatus.CONFIRMED)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        book(AppointmentStatus.PENDING)
+
+
+def test_a_rejected_booking_does_not_block_the_slot(doctor_with_monday_hours):
+    """The constraint is conditional — a dead booking must not hold a slot."""
+    when = _next_local(1, 10)
+    for status in (AppointmentStatus.REJECTED, AppointmentStatus.NO_SHOW):
+        Appointment.objects.create(
+            patient=UserFactory(),
+            doctor=doctor_with_monday_hours,
+            scheduled_at=when,
+            consultation_mode="online",
+            status=status,
+            fee=500,
+        )
+    assert not slot_is_taken(doctor_with_monday_hours, when)
+
+
+def test_doctor_detail_names_the_slots_already_gone(
+    doctor_with_monday_hours,
+    patient_client,
+):
+    """The booking screen cuts `availability` into slots, so it needs the
+    taken ones — it used to offer a slot and 400 at the end of the flow."""
+    when = _next_local(1, 10)
+    assert _book(patient_client, doctor_with_monday_hours, when).status_code == 201
+
+    detail = patient_client.get(
+        f"/api/healthcare/doctors/{doctor_with_monday_hours.provider_id}/",
+    )
+
+    assert detail.status_code == 200
+    taken = Appointment.objects.get().scheduled_at.isoformat()
+    assert detail.data["booked_slots"] == [taken]

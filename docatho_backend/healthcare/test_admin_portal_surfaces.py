@@ -14,6 +14,7 @@ import pytest
 from django.utils import timezone
 
 from docatho_backend.healthcare.models import Appointment
+from docatho_backend.healthcare.models import AppointmentPaymentStatus
 from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import ConsultationMessageKind
 from docatho_backend.healthcare.models import ConsultationMode
@@ -40,12 +41,20 @@ pytestmark = pytest.mark.django_db
 
 
 def _appointment(patient=None, doctor=None) -> Appointment:
+    """A paid, confirmed consultation whose slot is now.
+
+    The thread's write gate (`consultation_chat_is_open`) only opens 15 minutes
+    before the slot on a paid, non-terminal appointment, so these tests — which
+    are about who can reach the thread, not when — book it for now.
+    """
     return Appointment.objects.create(
         patient=patient or UserFactory(),
         doctor=doctor or DoctorProfileFactory(),
-        scheduled_at=timezone.now() + timedelta(days=1),
+        scheduled_at=timezone.now(),
         consultation_mode=ConsultationMode.ONLINE,
         fee=Decimal("699.00"),
+        payment_status=AppointmentPaymentStatus.PAID,
+        status=AppointmentStatus.CONFIRMED,
     )
 
 
@@ -57,27 +66,28 @@ def test_consultation_thread_readable_by_patient_doctor_and_staff(auth_client):
     doctor_user = appointment.doctor.provider.user
     url = f"/api/healthcare/appointments/{appointment.pk}/messages/"
 
-    sent = auth_client(appointment.patient).post(
-        url,
-        {"kind": ConsultationMessageKind.TEXT, "body": "Is the report ready?"},
-        format="json",
-    )
-    assert sent.status_code == 201, sent.data
-    assert sent.data["is_from_patient"] is True
-
-    replied = auth_client(doctor_user).post(
+    # The doctor opens the thread; the patient may only reply to one.
+    opened = auth_client(doctor_user).post(
         url,
         {"kind": ConsultationMessageKind.TEXT, "body": "Yes, uploading now."},
         format="json",
     )
+    assert opened.status_code == 201, opened.data
+    assert opened.data["is_from_patient"] is False
+
+    replied = auth_client(appointment.patient).post(
+        url,
+        {"kind": ConsultationMessageKind.TEXT, "body": "Is the report ready?"},
+        format="json",
+    )
     assert replied.status_code == 201, replied.data
-    assert replied.data["is_from_patient"] is False
+    assert replied.data["is_from_patient"] is True
 
     seen_by_admin = auth_client(AdminUserFactory()).get(url)
     assert seen_by_admin.status_code == 200
     assert [row["body"] for row in seen_by_admin.data] == [
-        "Is the report ready?",
         "Yes, uploading now.",
+        "Is the report ready?",
     ]
 
 
@@ -121,7 +131,9 @@ def test_a_doctors_message_notifies_the_patient(auth_client):
 
 def test_empty_text_message_is_refused(auth_client):
     appointment = _appointment()
-    response = auth_client(appointment.patient).post(
+    # Sent by the doctor: a patient posting into an unopened thread is refused
+    # before the body is ever validated.
+    response = auth_client(appointment.doctor.provider.user).post(
         f"/api/healthcare/appointments/{appointment.pk}/messages/",
         {"kind": ConsultationMessageKind.TEXT, "body": "   "},
         format="json",

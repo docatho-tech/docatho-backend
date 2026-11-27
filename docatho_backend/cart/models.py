@@ -8,6 +8,30 @@ from django.db import transaction
 from docatho_backend.masters.models import BaseModel
 from docatho_backend.medicines.models import Medicine
 
+TWO_PLACES = Decimal("0.01")
+
+
+def order_quote(subtotal: Decimal) -> dict[str, Decimal]:
+    """What an order of this item subtotal will actually cost.
+
+    The cart screen and checkout both read this now. They used to each do their
+    own arithmetic, and the cart's knew about neither the delivery fee nor the
+    standing order discount — so the cart's "to be paid" was a figure nobody was
+    ever charged. One function, one answer.
+    """
+    subtotal = Decimal(subtotal or 0).quantize(TWO_PLACES)
+    percent = Decimal(str(settings.PHARMACY_ORDER_DISCOUNT_PERCENT))
+    discount = min(
+        (subtotal * percent / Decimal("100")).quantize(TWO_PLACES),
+        subtotal,
+    )
+    delivery_fee = Decimal(str(settings.PHARMACY_DELIVERY_FEE)).quantize(TWO_PLACES)
+    return {
+        "order_discount": discount,
+        "delivery_fee": delivery_fee,
+        "payable_total": (subtotal + delivery_fee - discount).quantize(TWO_PLACES),
+    }
+
 
 class Cart(BaseModel):
     user = models.ForeignKey(

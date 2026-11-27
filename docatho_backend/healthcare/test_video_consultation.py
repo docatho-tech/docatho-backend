@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -9,6 +10,8 @@ from docatho_backend.healthcare.models import AppointmentPaymentStatus
 from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import ConsultationMode
 from docatho_backend.healthcare.video import close_stale_video_consultations
+from docatho_backend.notifications.models import Notification
+from docatho_backend.notifications.models import NotificationType
 from docatho_backend.testing.factories import DoctorProfileFactory
 from docatho_backend.testing.factories import UserFactory
 
@@ -56,8 +59,11 @@ def test_free_consultation_checkout_skips_the_gateway():
     appt.refresh_from_db()
     assert appt.payment_status == AppointmentPaymentStatus.PAID
     assert appt.payment_method == "free"
-    # Paid and accepted means the lobby lets the patient in.
+    # Paid and accepted, but the call is the doctor's to open.
     assert appt.status == AppointmentStatus.CONFIRMED
+    refused = client.post(f"/api/healthcare/appointments/{appt.pk}/video-token/")
+    assert refused.status_code == 403
+    Appointment.objects.filter(pk=appt.pk).update(video_started_at=timezone.now())
     token = client.post(f"/api/healthcare/appointments/{appt.pk}/video-token/")
     assert token.status_code == 200
 
@@ -255,6 +261,8 @@ def test_video_token_after_payment():
         payment_method="online",
         payment_status=AppointmentPaymentStatus.PAID,
         paid_at=timezone.now(),
+        # The doctor has opened the room — the patient only ever joins one.
+        video_started_at=timezone.now(),
     )
     client = APIClient()
     client.force_authenticate(user=patient)
@@ -262,3 +270,79 @@ def test_video_token_after_payment():
     assert res.status_code == 200
     assert "auth_token" in res.data
     assert res.data["appointment_id"] == appt.pk
+
+
+def test_unconfigured_video_503s_instead_of_minting_a_fake_token():
+    """Production with no 100ms env used to hand the app a token no room
+    accepts, and the failure read as "the video call is broken"."""
+    patient = UserFactory()
+    doctor = DoctorProfileFactory()
+    appt = Appointment.objects.create(
+        patient=patient,
+        doctor=doctor,
+        scheduled_at=timezone.now() + timedelta(minutes=10),
+        consultation_mode=ConsultationMode.ONLINE,
+        status=AppointmentStatus.CONFIRMED,
+        fee=500,
+        payment_method="online",
+        payment_status=AppointmentPaymentStatus.PAID,
+        video_started_at=timezone.now(),
+    )
+    client = APIClient()
+    client.force_authenticate(user=patient)
+
+    with override_settings(HMS_ALLOW_MOCK_TOKENS=False):
+        res = client.post(f"/api/healthcare/appointments/{appt.pk}/video-token/")
+
+    assert res.status_code == 503
+    assert "not configured" in str(res.data["detail"])
+    # Nothing half-done: no fake room id left on the record.
+    appt.refresh_from_db()
+    assert appt.video_room_id == ""
+
+
+def test_doctor_opening_the_room_is_what_calls_the_patient():
+    """The consultation is doctor-initiated: the patient is told, then joins.
+
+    Before this, the patient's lobby could mint a token on its own and the
+    doctor was merely notified that someone was waiting — the opposite of how
+    the consultation is meant to start.
+    """
+    patient = UserFactory()
+    doctor = DoctorProfileFactory()
+    appt = Appointment.objects.create(
+        patient=patient,
+        doctor=doctor,
+        scheduled_at=timezone.now() + timedelta(minutes=10),
+        consultation_mode=ConsultationMode.ONLINE,
+        status=AppointmentStatus.CONFIRMED,
+        fee=1,
+        payment_method="online",
+        payment_status=AppointmentPaymentStatus.PAID,
+        paid_at=timezone.now(),
+    )
+    patient_client = APIClient()
+    patient_client.force_authenticate(user=patient)
+    too_early = patient_client.post(
+        f"/api/healthcare/appointments/{appt.pk}/video-token/",
+    )
+    assert too_early.status_code == 403
+
+    doctor_client = APIClient()
+    doctor_client.force_authenticate(user=doctor.provider.user)
+    started = doctor_client.post(
+        f"/api/healthcare/provider/appointments/{appt.pk}/video-token/",
+    )
+    assert started.status_code == 200
+
+    call = Notification.objects.filter(
+        recipient=patient,
+        notification_type=NotificationType.CONSULTATION_CALL_STARTED,
+    ).first()
+    assert call is not None, "the patient was never told the call had started"
+    assert call.data["appointment_id"] == appt.pk
+
+    joined = patient_client.post(
+        f"/api/healthcare/appointments/{appt.pk}/video-token/",
+    )
+    assert joined.status_code == 200

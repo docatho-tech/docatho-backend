@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 
 from docatho_backend.healthcare import views
 from docatho_backend.healthcare.prescription_api import AppointmentPrescriptionAPIView
+from docatho_backend.healthcare.receipts import ConsultationReceiptAPIView
 
 router = DefaultRouter()
 router.register("appointments", views.AppointmentViewSet, basename="appointment")
@@ -127,6 +128,13 @@ urlpatterns = [
         "admin/appointments/<int:appointment_id>/prescription/",
         AppointmentPrescriptionAPIView.as_view(),
         name="admin-appointment-prescription",
+    ),
+    # The receipt for a paid consultation. Not under `provider/` or `admin/`:
+    # the patient who paid is its main reader.
+    path(
+        "appointments/<int:appointment_id>/receipt/",
+        ConsultationReceiptAPIView.as_view(),
+        name="appointment-receipt",
     ),
     path(
         "provider/diagnostic-bookings/",

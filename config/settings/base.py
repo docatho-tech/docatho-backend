@@ -87,6 +87,12 @@ HMS_DOCTOR_ROLE = env("HMS_DOCTOR_ROLE", default="host")
 # 100ms app subdomain — only used to build browser-joinable prebuilt URLs
 # (https://<subdomain>.app.100ms.live/meeting/<room-code>) for E2E and support.
 HMS_SUBDOMAIN = env("HMS_SUBDOMAIN", default="")
+# A fake, unjoinable token is a development convenience. In production an
+# unconfigured 100ms has to fail the video-token request honestly — handing the
+# app a token no room will accept surfaces as "the video call is broken", which
+# is a much longer debug than a 503 that says the service is not configured.
+# Deliberately not a startup check: a missing key must break video, not the API.
+HMS_ALLOW_MOCK_TOKENS = env.bool("HMS_ALLOW_MOCK_TOKENS", default=DEBUG)
 
 # Google Places, for the delivery-address search. Server-side on purpose — see
 # docatho_backend/users/places.py. Restrict the key to this box's IP and to the
@@ -259,6 +265,28 @@ MEDIA_ROOT = str(APPS_DIR.path("static"))
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "/media/"
 
+# Medical documents — prescription PDFs, lab reports — do not go in the public
+# prefix. They live under `private-media/`, which no bucket policy grants read
+# on, and are addressed by short-lived presigned URLs instead (see
+# `healthcare/private_media.py`). `AWS_QUERYSTRING_AUTH = False` stays as it is:
+# it is what keeps every product image URL already in the database working.
+#
+# No `default_acl`: the bucket has Object Ownership = bucket owner enforced, so
+# a per-object ACL is rejected outright — the prefix is private because nothing
+# grants it, not because each object says so.
+PRIVATE_MEDIA_LOCATION = "private-media"
+#: Long enough to open a PDF, short enough that a leaked link is worthless.
+PRIVATE_MEDIA_URL_EXPIRY = env.int("PRIVATE_MEDIA_URL_EXPIRY", default=300)
+PRIVATE_S3_STORAGE = {
+    "BACKEND": "storages.backends.s3.S3Storage",
+    "OPTIONS": {
+        "location": PRIVATE_MEDIA_LOCATION,
+        "file_overwrite": False,
+        "querystring_auth": True,
+        "querystring_expire": PRIVATE_MEDIA_URL_EXPIRY,
+    },
+}
+
 # Uploaded media goes to S3 whenever AWS credentials are configured, whichever
 # settings module is in use.
 #
@@ -273,6 +301,23 @@ MEDIA_URL = "/media/"
 # Static files are deliberately left alone: moving them would make every deploy
 # depend on `collectstatic` reaching S3, which is a bigger change than "put the
 # uploads somewhere durable".
+# Disk by default, so a developer with no AWS keys still has a "private" alias
+# to resolve. There is nothing to sign on a local filesystem — the separation is
+# the prefix, and the real guarantee only exists on S3.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+    "private": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {
+            "location": f"{MEDIA_ROOT}/{PRIVATE_MEDIA_LOCATION}",
+            "base_url": f"{MEDIA_URL}{PRIVATE_MEDIA_LOCATION}/",
+        },
+    },
+}
+
 AWS_ACCESS_KEY_ID = env("DJANGO_AWS_ACCESS_KEY_ID", default="")
 if AWS_ACCESS_KEY_ID:
     AWS_SECRET_ACCESS_KEY = env("DJANGO_AWS_SECRET_ACCESS_KEY")
@@ -295,6 +340,7 @@ if AWS_ACCESS_KEY_ID:
         "staticfiles": {
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
         },
+        "private": PRIVATE_S3_STORAGE,
     }
     _aws_domain = (
         AWS_S3_CUSTOM_DOMAIN or f"{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com"
@@ -524,6 +570,20 @@ CELERY_TASK_TIME_LIMIT = 5 * 60
 CELERY_TASK_SOFT_TIME_LIMIT = 60
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-scheduler
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+# The DatabaseScheduler still syncs this static schedule into the beat tables on
+# startup, so an entry here is all a periodic job needs.
+#
+# Every 10 minutes against a 30-minute window: a reminder has to go out before
+# the slot, and a cadence equal to the window would miss anything booked just
+# after a sweep. Running it three times per window costs two no-op passes —
+# `send_due_reminders` skips an appointment that already has a reminder
+# notification, so a second pass sends nothing rather than buzzing twice.
+CELERY_BEAT_SCHEDULE = {
+    "send-appointment-reminders": {
+        "task": "docatho_backend.healthcare.tasks.send_appointment_reminders",
+        "schedule": 10 * 60,
+    },
+}
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-send-task-events
 CELERY_WORKER_SEND_TASK_EVENTS = True
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std-setting-task_send_sent_event

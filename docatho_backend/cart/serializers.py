@@ -6,6 +6,7 @@ from docatho_backend.medicines.models import Medicine
 
 from .models import Cart
 from .models import CartItem
+from .models import order_quote
 
 
 class MedicineLiteSerializer(serializers.ModelSerializer):
@@ -53,6 +54,14 @@ class CartSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source="user.name", read_only=True)
     address = serializers.SerializerMethodField(required=False)
 
+    # The three figures checkout will actually use. `total` is items minus any
+    # cart-level discount and excludes the delivery fee, so a screen that shows
+    # it as the amount payable is lying; these come from the one function
+    # checkout itself calls.
+    order_discount = serializers.SerializerMethodField()
+    delivery_fee = serializers.SerializerMethodField()
+    payable_total = serializers.SerializerMethodField()
+
     class Meta:
         model = Cart
         fields = (
@@ -65,9 +74,21 @@ class CartSerializer(serializers.ModelSerializer):
             "discount_amount",
             "discount_type",
             "total",
+            "order_discount",
+            "delivery_fee",
+            "payable_total",
             "items",
         )
         read_only_fields = ("total_mrp", "subtotal", "total", "items")
+
+    def get_order_discount(self, obj):
+        return order_quote(obj.subtotal)["order_discount"]
+
+    def get_delivery_fee(self, obj):
+        return order_quote(obj.subtotal)["delivery_fee"]
+
+    def get_payable_total(self, obj):
+        return order_quote(obj.subtotal)["payable_total"]
 
     def get_address(self, obj):
         address = obj.user.address  # default address, else most recent

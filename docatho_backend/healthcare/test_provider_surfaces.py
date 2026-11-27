@@ -18,6 +18,7 @@ from docatho_backend.healthcare.models import AppointmentStatus
 from docatho_backend.healthcare.models import ConsultationMode
 from docatho_backend.healthcare.models import DiagnosticBooking
 from docatho_backend.healthcare.models import DiagnosticBookingStatus
+from docatho_backend.providers.earnings import earnings_lines
 from docatho_backend.testing.factories import DiagnosticTestFactory
 from docatho_backend.testing.factories import DoctorProfileFactory
 from docatho_backend.testing.factories import ProviderFactory
@@ -348,3 +349,56 @@ def test_a_doctor_can_block_and_unblock_a_day(auth_client):
     assert client.get(
         "/api/healthcare/provider/availability/",
     ).data["blocked_dates"] == []
+
+
+# --------------------------------------------------------------------------- #
+# A no-show is not a consultation
+# --------------------------------------------------------------------------- #
+def test_doctor_records_a_no_show_and_earns_nothing_for_it(auth_client):
+    """"Completed" was the only way to clear the row, which paid for a call
+    that never happened."""
+    profile = DoctorProfileFactory()
+    appointment = Appointment.objects.create(
+        patient=UserFactory(),
+        doctor=profile,
+        scheduled_at=timezone.now() - timedelta(hours=1),
+        consultation_mode=ConsultationMode.ONLINE,
+        status=AppointmentStatus.CONFIRMED,
+        fee=Decimal("500.00"),
+    )
+
+    resp = auth_client(profile.provider.user).patch(
+        "/api/healthcare/provider/appointments/",
+        {"appointment_id": appointment.id, "status": AppointmentStatus.NO_SHOW},
+        format="json",
+    )
+
+    assert resp.status_code == 200
+    appointment.refresh_from_db()
+    assert appointment.status == AppointmentStatus.NO_SHOW
+    # Not completed, so not earned and not billable.
+    assert appointment.completed_at is None
+    assert resp.data["requires_payment"] is False
+    assert earnings_lines(profile.provider) == []
+
+
+# --------------------------------------------------------------------------- #
+# The queue has to drain, and unscheduled work has to be visible
+# --------------------------------------------------------------------------- #
+def test_the_working_queue_drops_finished_work_but_keeps_unallotted(auth_client):
+    centre = make_centre()
+    waiting = make_booking(centre, status=DiagnosticBookingStatus.REQUESTED)
+    done = make_booking(centre, status=DiagnosticBookingStatus.COMPLETED)
+    cancelled = make_booking(centre, status=DiagnosticBookingStatus.CANCELLED)
+    client = auth_client(centre.user)
+
+    working = [row["id"] for row in client.get(BOOKINGS_URL).data]
+    # No slot yet is the row the centre has to act on, not one to hide.
+    assert waiting.scheduled_date is None
+    assert waiting.id in working
+    assert done.id not in working
+    assert cancelled.id not in working
+
+    # Still reachable, just not in the working queue.
+    finished = [row["id"] for row in client.get(f"{BOOKINGS_URL}?bucket=completed").data]
+    assert finished == [done.id]

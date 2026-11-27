@@ -1,7 +1,6 @@
 from decimal import Decimal
 from uuid import uuid4
 
-from django.conf import settings
 from django.db import transaction as db_transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -19,6 +18,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from docatho_backend.cart.models import Cart
+from docatho_backend.cart.models import order_quote
+from docatho_backend.healthcare.private_media import stored_file_url
 from docatho_backend.masters.buckets import ORDER_BUCKETS
 from docatho_backend.masters.buckets import apply_bucket
 from docatho_backend.masters.permissions import IsAdmin
@@ -37,6 +38,7 @@ from .models import PayoutStatus
 from .models import Prescription
 from .models import Transaction
 from .razorpay import RazorpayClient
+from .settlement import settle_paid_order
 
 
 # --------------------------------------------------------------------------- #
@@ -47,6 +49,17 @@ class PrescriptionSerializer(serializers.ModelSerializer):
         model = Prescription
         fields = ("id", "image", "status", "notes", "created_at")
         read_only_fields = ("id", "status", "created_at")
+
+    def to_representation(self, instance):
+        """Answer a signed address, not the raw one DRF builds.
+
+        Overridden rather than swapped for a method field because `image` is
+        also how the file is uploaded — a read-only field here would take away
+        the write.
+        """
+        data = super().to_representation(instance)
+        data["image"] = stored_file_url(instance.image, self.context.get("request"))
+        return data
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -211,6 +224,22 @@ class UpdateOrderStatusSerializer(serializers.Serializer):
         order.save(update_fields=[*written, "updated_at"])
 
 
+class CustomerUpdateOrderStatusSerializer(serializers.Serializer):
+    """Statuses a customer is allowed to drive on their own order.
+
+    `UpdateOrderStatusSerializer` accepts every `Order.Status` because the
+    provider and admin queues legitimately move an order through the whole
+    fulfilment lifecycle. On the customer endpoint that was an open door:
+    `delivered` is what `analytics` reads as realised revenue and books a
+    provider earning against, so a customer could mark an uncollected COD
+    order delivered and leave the platform owing the pharmacy cash it never
+    received. Cancelling is the only transition a customer actually needs.
+    """
+
+    status = serializers.ChoiceField(choices=[Order.Status.CANCELLED])
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
 class AssignProviderSerializer(serializers.Serializer):
     provider_id = serializers.IntegerField()
 
@@ -321,10 +350,24 @@ class OrderViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["patch"], url_path="update-status")
     def update_status(self, request, pk=None):
-        """Customer-initiated status changes (e.g. cancel their own order)."""
+        """Customer-initiated status changes: cancelling their own order.
+
+        Deliberately narrower than the provider/admin endpoint — see
+        `CustomerUpdateOrderStatusSerializer`.
+        """
         order = get_object_or_404(Order, pk=pk, user=request.user)
-        serializer = UpdateOrderStatusSerializer(data=request.data)
+        serializer = CustomerUpdateOrderStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if order.status not in Order.CUSTOMER_CANCELLABLE_STATUSES:
+            return Response(
+                {
+                    "detail": (
+                        "This order can no longer be cancelled. "
+                        "Please contact support."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             order.update_status(
                 new_status=serializer.validated_data["status"],
@@ -404,6 +447,48 @@ class OrderViewSet(viewsets.ViewSet):
                     {"detail": "Invalid prescription."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # A document a pharmacist already rejected is not a prescription.
+            # Accepting it produced an order that could never be fulfilled.
+            if prescription.status == Prescription.Status.REJECTED:
+                return Response(
+                    {
+                        "detail": "That prescription was rejected. "
+                        "Please upload a valid one.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # --- Prices must still be the catalogue's -------------------------- #
+        # Cart rows snapshot the price at the moment the item went in. Checking
+        # out against a stale snapshot either overcharges the patient or shorts
+        # the pharmacy, both silently. Re-price the cart and make them look at
+        # the new total rather than moving money on a figure nobody agreed to.
+        repriced = []
+        for ci in cart_items:
+            live_price = ci.medicine.price or Decimal("0.00")
+            live_mrp = ci.medicine.mrp or live_price
+            if ci.unit_price != live_price or ci.mrp != live_mrp:
+                repriced.append(
+                    {
+                        "name": ci.medicine.name,
+                        "old_price": str(ci.unit_price),
+                        "new_price": str(live_price),
+                    },
+                )
+                ci.unit_price = live_price
+                ci.mrp = live_mrp
+                ci.save(update_fields=["unit_price", "mrp", "updated_at"])
+        if repriced:
+            cart.recalculate()
+            return Response(
+                {
+                    "detail": "Prices for some items in your cart have changed. "
+                    "Please review the updated total and place the order again.",
+                    "price_changed": True,
+                    "items": repriced,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         # --- Stock availability (soft check before creating the order) ---- #
         shortages = [
@@ -472,15 +557,11 @@ class OrderViewSet(viewsets.ViewSet):
 
             order.recalc_totals()
 
-            # Server-controlled money rules.
-            discount_percent = Decimal(str(settings.PHARMACY_ORDER_DISCOUNT_PERCENT))
-            discount_amount = (
-                order.subtotal * (discount_percent / Decimal("100"))
-            ).quantize(Decimal("0.01"))
-            order.discount_amount = min(discount_amount, order.subtotal)
-            order.delivery_fee = Decimal(str(settings.PHARMACY_DELIVERY_FEE)).quantize(
-                Decimal("0.01"),
-            )
+            # Server-controlled money rules — the same function the cart screen
+            # is quoted from, so the two can never disagree.
+            quote = order_quote(order.subtotal)
+            order.discount_amount = quote["order_discount"]
+            order.delivery_fee = quote["delivery_fee"]
             order.recalc_totals()
             order.compute_commission()
 
@@ -489,10 +570,12 @@ class OrderViewSet(viewsets.ViewSet):
                 try:
                     order.reserve_stock()
                 except ValueError as exc:
-                    return Response(
-                        {"detail": str(exc)},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    # Raised, not returned: `return` inside an atomic block
+                    # commits it, so a COD checkout that hit a shortage used to
+                    # answer 400 and still leave a real order behind — stock
+                    # never deducted, cart never emptied, and the row sitting in
+                    # the pharmacy's queue. Raising rolls the order back.
+                    raise serializers.ValidationError({"detail": str(exc)}) from exc
                 cart.clear()
                 rp_order = None
             else:
@@ -533,6 +616,7 @@ class OrderViewSet(viewsets.ViewSet):
                 razorpay_payment_id=d["razorpay_payment_id"],
                 razorpay_signature=d["razorpay_signature"],
                 raw_response=None,
+                user=request.user,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -543,29 +627,7 @@ class OrderViewSet(viewsets.ViewSet):
             )
 
         if tr.succeeded:
-            order = tr.order
-            try:
-                order.reserve_stock()
-            except ValueError:
-                # Payment already captured; flag the shortage for ops instead of
-                # failing the confirmation.
-                order.update_status(
-                    Order.Status.PROCESSING,
-                    notes="Stock shortage after payment; needs manual review.",
-                )
-            try:
-                cart = Cart.objects.filter(user=order.user).first()
-                if cart and cart.items.exists():
-                    cart.clear()
-            except Exception:
-                pass
-            notify(
-                order.user,
-                NotificationType.PAYMENT,
-                "Payment received",
-                f"We received your payment for order {order.order_number}.",
-                order=order,
-            )
+            settle_paid_order(tr.order)
 
         return Response(
             {

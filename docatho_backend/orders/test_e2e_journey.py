@@ -261,6 +261,14 @@ def test_full_rx_journey_upload_then_checkout_then_fulfil(auth_client):
         {"provider_id": provider.id},
         format="json",
     )
+    # A Schedule H item cannot be dispensed until someone has actually looked
+    # at the document, so the review step is part of the journey now.
+    review = admin_client.patch(
+        f"/api/healthcare/admin/prescriptions/{prescription_id}/",
+        {"status": "approved"},
+        format="json",
+    )
+    assert review.status_code == 200, review.data
     _fulfil_to_delivered(auth_client(provider.user), order.id)
     order.refresh_from_db()
     assert order.status == Order.Status.DELIVERED

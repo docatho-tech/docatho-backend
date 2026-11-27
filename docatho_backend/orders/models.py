@@ -6,7 +6,9 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from docatho_backend.healthcare.private_media import private_storage
 from docatho_backend.masters.models import BaseModel
+from docatho_backend.medicines.models import RX_REQUIRED_SCHEDULES
 from docatho_backend.medicines.models import Medicine
 
 TWO_PLACES = Decimal("0.01")
@@ -20,7 +22,10 @@ class Prescription(BaseModel):
     """A prescription document uploaded by a patient.
 
     Required to check out any medicine with ``is_prescription_required=True``.
-    Stored via the default storage backend (local in dev, S3 in production).
+    Stored privately: it carries a patient's name and the drugs they were
+    prescribed, so the address has to expire. Read it through
+    ``stored_file_url``, never ``image.url`` — rows uploaded before the move are
+    still on the public prefix.
     """
 
     class Status(models.TextChoices):
@@ -33,7 +38,10 @@ class Prescription(BaseModel):
         on_delete=models.CASCADE,
         related_name="prescriptions",
     )
-    image = models.FileField(upload_to="prescriptions/%Y/%m/")
+    image = models.FileField(
+        upload_to="private/prescriptions/%Y/%m/",
+        storage=private_storage,
+    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -87,6 +95,19 @@ class Order(BaseModel):
 
     # Statuses that free previously reserved stock.
     STOCK_RELEASING_STATUSES = frozenset({"rejected", "cancelled", "returned"})
+
+    # Statuses that mean the pharmacy is acting on the order: picking it,
+    # packing it, handing it to a rider. Everything from here on costs real
+    # stock and real delivery, so the preconditions below are checked once,
+    # here, rather than in each of the three endpoints that move an order on.
+    FULFILMENT_STATUSES = frozenset(
+        {"approved", "packed", "processing", "out_for_delivery", "delivered"},
+    )
+
+    # Statuses a customer may still cancel from: everything before the order
+    # physically leaves the pharmacy. Once it is packed, cancellation is a
+    # support/return matter, not a self-service one.
+    CUSTOMER_CANCELLABLE_STATUSES = frozenset({"placed", "confirmed", "approved"})
 
     order_number = models.CharField(max_length=64, unique=True, db_index=True)
     user = models.ForeignKey(
@@ -289,11 +310,59 @@ class Order(BaseModel):
         self.stock_reserved = False
         self.save(update_fields=["stock_reserved", "updated_at"])
 
+    @property
+    def scheduled_drug_names(self) -> list[str]:
+        """Names of items on this order that are Schedule H/H1/X.
+
+        Dispensing these against an unchecked document is the regulated
+        offence, so fulfilment asks for a *reviewed* prescription, not merely
+        an uploaded one.
+        """
+        return list(
+            self.items.filter(
+                medicine__schedule__in=RX_REQUIRED_SCHEDULES,
+            ).values_list("medicine__name", flat=True),
+        )
+
+    def fulfilment_block_reason(self) -> str | None:
+        """Why this order may not be worked on yet, or ``None`` if it may.
+
+        Both conditions used to be nobody's job: an online order whose payment
+        failed could be approved and packed, and a Schedule H order went out on
+        a prescription no pharmacist had looked at.
+        """
+        if (
+            self.payment_method == self.PaymentMethod.ONLINE
+            and self.payment_status != self.PaymentStatus.PAID
+        ):
+            return (
+                "This order was placed online and is not paid "
+                f"(payment is {self.get_payment_status_display().lower()}). "
+                "It cannot be fulfilled until payment succeeds."
+            )
+
+        scheduled = self.scheduled_drug_names
+        if scheduled:
+            rx = self.prescription
+            if rx is None:
+                return (
+                    "A prescription is required before dispensing "
+                    f"{', '.join(scheduled)}."
+                )
+            if rx.status != Prescription.Status.APPROVED:
+                return (
+                    "The prescription for "
+                    f"{', '.join(scheduled)} has not been approved yet "
+                    f"(it is {rx.get_status_display().lower()})."
+                )
+        return None
+
     @transaction.atomic
     def update_status(self, new_status: str, notes: str | None = None) -> None:
         """Update the order status with validation and side effects.
 
-        Raises ``ValueError`` if ``new_status`` is not a valid choice.
+        Raises ``ValueError`` if ``new_status`` is not a valid choice, or if the
+        order is not yet allowed to be fulfilled.
         """
         valid_statuses = [choice[0] for choice in self.Status.choices]
         if new_status not in valid_statuses:
@@ -301,6 +370,14 @@ class Order(BaseModel):
                 f"Invalid status '{new_status}'. Must be one of: "
                 f"{', '.join(valid_statuses)}",
             )
+
+        # Checked here rather than in each endpoint: the customer app, the
+        # pharmacy app and the admin portal all move orders on, and only two of
+        # the three had any payment check at all.
+        if new_status in self.FULFILMENT_STATUSES:
+            blocked = self.fulfilment_block_reason()
+            if blocked:
+                raise ValueError(blocked)
 
         old_status = self.status
         self.status = new_status
@@ -323,6 +400,14 @@ class Order(BaseModel):
         # Return stock to inventory when an order is rejected/cancelled/returned.
         if new_status in self.STOCK_RELEASING_STATUSES:
             self.release_stock()
+            # ...and the patient's money, which nothing used to do: the
+            # REFUNDED payment status existed as a choice no code ever set.
+            # Imported here, not at module scope: razorpay.py imports this
+            # module. Queued on commit so the gateway call happens outside the
+            # transaction holding this row.
+            from .refunds import refund_order
+
+            transaction.on_commit(lambda: refund_order(self.pk))
 
         try:
             OrderLog.objects.create(

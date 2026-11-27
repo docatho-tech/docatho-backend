@@ -7,6 +7,8 @@ import json
 import math
 from decimal import Decimal
 
+from django.db import IntegrityError
+from django.db import transaction
 from django.db.models import Count
 from django.db.models import ExpressionWrapper
 from django.db.models import F
@@ -27,6 +29,7 @@ from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import MethodNotAllowed
 from rest_framework.generics import ListAPIView
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from rest_framework.parsers import FormParser
@@ -74,7 +77,13 @@ from docatho_backend.healthcare.models import SavedDoctor
 from docatho_backend.healthcare.models import SupportTicket
 from docatho_backend.healthcare.models import VerificationStatus
 from docatho_backend.healthcare.models import WishlistItem
+from docatho_backend.healthcare.models import booked_slots
+from docatho_backend.healthcare.models import slot_is_taken
+from docatho_backend.healthcare.private_media import signed_url
+from docatho_backend.healthcare.private_media import stored_file_url
 from docatho_backend.healthcare.video import mint_video_token
+from docatho_backend.healthcare.video import consultation_chat_is_open
+from docatho_backend.healthcare.video import doctor_opened_thread
 from docatho_backend.healthcare.video import patient_can_join_video
 from docatho_backend.healthcare.video import provider_can_join_video
 from docatho_backend.masters.buckets import APPOINTMENT_BUCKETS
@@ -322,6 +331,9 @@ class AppointmentSerializer(serializers.ModelSerializer):
                 AppointmentStatus.CANCELLED,
                 AppointmentStatus.REJECTED,
                 AppointmentStatus.COMPLETED,
+                # Nothing happened, so nothing is owed — asking a patient to
+                # pay for a consultation nobody attended is the bug.
+                AppointmentStatus.NO_SHOW,
             )
         )
 
@@ -366,11 +378,9 @@ class AdminAppointmentSerializer(AppointmentSerializer):
         claim that it came out of this consultation.
         """
         prescription = obj.patient.prescriptions.order_by("-created_at").first()
-        if prescription is None or not prescription.image:
+        if prescription is None:
             return ""
-        request = self.context.get("request")
-        url = prescription.image.url
-        return request.build_absolute_uri(url) if request else url
+        return stored_file_url(prescription.image, self.context.get("request"))
 
     def get_message_count(self, obj):
         return obj.messages.count()
@@ -457,20 +467,12 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
                 {"scheduled_at": "The doctor is not available on that date."},
             )
 
-        # ponytail: a plain existence check, so two bookings landing in the same
-        # instant can both pass. A unique constraint on (doctor, scheduled_at)
-        # is the fix if that ever actually happens.
-        clash = (
-            Appointment.objects.filter(doctor=doctor, scheduled_at=scheduled_at)
-            .exclude(
-                status__in=(
-                    AppointmentStatus.CANCELLED,
-                    AppointmentStatus.REJECTED,
-                ),
-            )
-            .exists()
-        )
-        if clash:
+        # The friendly answer. It can still lose a race — two requests can both
+        # read a free slot — which is what the unique constraint on
+        # (doctor, scheduled_at) and the IntegrityError handling in `create`
+        # are for. Same `slot_is_taken` the booked-slot list uses, so the two
+        # cannot disagree about what "taken" means.
+        if slot_is_taken(doctor, scheduled_at):
             raise serializers.ValidationError(
                 {"scheduled_at": "That slot is already booked."},
             )
@@ -500,7 +502,17 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
         if validated_data.get("consultation_mode") == ConsultationMode.ONLINE:
             if validated_data.get("payment_method") in ("", "pay_at_clinic", "cod"):
                 validated_data["payment_method"] = "online"
-        return super().create(validated_data)
+        try:
+            # Savepoint: ATOMIC_REQUESTS wraps the whole request, and an
+            # IntegrityError poisons the transaction it was raised in — without
+            # this the 400 below could not be written.
+            with transaction.atomic():
+                return super().create(validated_data)
+        except IntegrityError:
+            # The loser of a slot race. A 500 is what this used to be.
+            raise serializers.ValidationError(
+                {"scheduled_at": "That slot was just taken. Pick another time."},
+            ) from None
 
 
 class DiagnosticTestCategorySerializer(serializers.ModelSerializer):
@@ -653,6 +665,16 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="center.city", read_only=True, default="")
     test_count = serializers.SerializerMethodField()
     auto_accept_at = serializers.SerializerMethodField()
+    reports = serializers.SerializerMethodField()
+
+    def get_reports(self, obj) -> list[str]:
+        """Signed per read.
+
+        A lab report is a named patient's results, so new ones are stored as
+        `private:<key>` references and get a short-lived URL here. Entries
+        written before that are plain public URLs and pass through unchanged.
+        """
+        return [signed_url(ref) for ref in (obj.reports or [])]
 
     def get_test_count(self, obj):
         return obj.tests.count()
@@ -694,7 +716,9 @@ class DiagnosticBookingSerializer(serializers.ModelSerializer):
             "patient_gender",
             "patient_photo",
         )
-        read_only_fields = ("id", "status", "total_amount", "created_at", "reports")
+        # `reports` is not listed: it is a declared method field above, and DRF
+        # refuses a field that is both.
+        read_only_fields = ("id", "status", "total_amount", "created_at")
 
     def validate(self, attrs):
         # Only on create: an admin PATCHing a status sends neither list, and
@@ -1037,29 +1061,47 @@ def _provider_user_for(appointment):
 
 
 def notify_appointment_reminder(appointment):
-    """ "Reminder: Starts in 30 minutes." — sent once, by the sweep command."""
-    provider_user = _provider_user_for(appointment)
-    if not provider_user:
-        return None
-    return notify(
-        provider_user,
+    """ "Reminder: Starts in 30 minutes." — to both sides, once, from the sweep.
+
+    The patient gets it too: they are the one who has to be somewhere, or open
+    the app for a video call, and a reminder only the doctor sees does not keep
+    the appointment. Both rows are written in the same pass, so the sweep's
+    dedupe — any existing reminder notification for this appointment — still
+    makes a second run a no-op.
+    """
+    data = _appointment_notification_data(appointment)
+    when = _format_appointment_datetime(appointment)
+    sent = notify(
+        appointment.patient,
         NotificationType.APPOINTMENT_REMINDER,
-        f"Consultation with {appointment.patient.name}",
-        "Reminder: Starts in 30 minutes.",
-        data=_appointment_notification_data(appointment),
+        f"Appointment with Dr. {appointment.doctor.provider.name}",
+        f"Reminder: Starts in 30 minutes ({when}).",
+        data=data,
     )
-
-
-def _notify_patient_waiting(appointment):
-    """The patient has opened the room; the doctor has not joined yet."""
     provider_user = _provider_user_for(appointment)
-    if not provider_user:
-        return
+    if provider_user:
+        sent = notify(
+            provider_user,
+            NotificationType.APPOINTMENT_REMINDER,
+            f"Consultation with {appointment.patient.name}",
+            "Reminder: Starts in 30 minutes.",
+            data=data,
+        )
+    return sent
+
+
+def _notify_call_started(appointment):
+    """The doctor has opened the room — tell the patient to come in.
+
+    Sent on every token the doctor mints, not only the first: a doctor who
+    drops out and rejoins is calling the patient again, and the patient may
+    have missed the first push.
+    """
     notify(
-        provider_user,
-        NotificationType.APPOINTMENT_WAITING,
-        f"{appointment.patient.name} is waiting in consultation room",
-        "Please join to start consultation",
+        appointment.patient,
+        NotificationType.CONSULTATION_CALL_STARTED,
+        f"Dr. {appointment.doctor.provider.name} is calling",
+        "Tap to join your video consultation",
         data=_appointment_notification_data(appointment),
     )
 
@@ -1103,6 +1145,14 @@ def _notify_appointment_status_change(appointment, new_status):
             "Appointment cancelled",
             f"Your appointment with Dr. {doctor_name} on {when} was cancelled.",
         ),
+        # No notification type of its own: the row reads the same to the
+        # patient either way, and a new type means a release of all three apps
+        # before anything can render it.
+        AppointmentStatus.NO_SHOW: (
+            NotificationType.APPOINTMENT_CANCELLED,
+            "Marked as no show",
+            f"Your appointment with Dr. {doctor_name} on {when} was marked as a no show.",
+        ),
     }
     entry = mapping.get(new_status)
     if not entry:
@@ -1128,6 +1178,27 @@ def _notify_appointment_status_change(appointment, new_status):
                 "Upload notes if required.",
                 data=_appointment_notification_data(appointment),
             )
+
+
+def _notify_provider_appointment_cancelled(appointment):
+    """The patient dropped the slot, and the provider is the one who replans.
+
+    `_notify_appointment_status_change` is the doctor-initiated direction and
+    notifies the patient; this is the other way round. Nothing told the doctor
+    at all before, so a cancelled slot stayed blocked in their day.
+    """
+    provider_user = _provider_user_for(appointment)
+    if not provider_user:
+        return
+    when = _format_appointment_datetime(appointment)
+    reason = appointment.cancellation_reason
+    notify(
+        provider_user,
+        NotificationType.APPOINTMENT_CANCELLED,
+        f"{appointment.patient.name} cancelled their appointment",
+        f"{when} is free again." + (f" Reason: {reason}" if reason else ""),
+        data=_appointment_notification_data(appointment),
+    )
 
 
 def _booking_kind_for_provider(center) -> str:
@@ -1296,6 +1367,10 @@ class DoctorDetailAPIView(APIView):
             doctor.availability_slots.filter(is_active=True),
             many=True,
         ).data
+        # `availability` is weekly opening hours; the booking screen cuts them
+        # into slots. Without the taken ones it offered slots another patient
+        # already had, and the booking came back 400 at the end of the flow.
+        data["booked_slots"] = booked_slots(doctor)
         data["is_saved"] = False
         if request.user.is_authenticated:
             data["is_saved"] = SavedDoctor.objects.filter(
@@ -1374,6 +1449,12 @@ class MedicalSpecialtyViewSet(viewsets.ModelViewSet):
 
 class AppointmentViewSet(viewsets.ModelViewSet):
     pagination_class = GenericPaginationClass
+    # No PUT: every client patches. DELETE stays only for the dashboard's
+    # "Delete consultation" action, and `destroy` below locks it to staff —
+    # deleting an appointment cascades away the consultation thread and the
+    # prescription, which a patient must not be able to do to their own
+    # medical record.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     # `patient` lets the admin dashboard show one patient's consultation
     # history without a bespoke endpoint; `doctor` does the same for the
     # doctor profile page, which reports that doctor's own consultation
@@ -1420,6 +1501,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if self.request.user.is_staff:
             return [IsAdmin()]
         return [IsCustomer()]
+
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.is_staff:
+            raise MethodNotAllowed(request.method)
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = Appointment.objects.select_related(
@@ -1527,17 +1613,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             "docatho_backend.healthcare.hms",
             fromlist=["HMSClient"],
         ).HMSClient()
-        # Read before minting: `mint_video_token` stamps `video_started_at`
-        # itself, so asking afterwards always answers "already started" and the
-        # doctor is never told anyone is waiting.
-        first_join = appointment.video_started_at is None
         payload = mint_video_token(
             appointment,
             user=request.user,
             role=client.patient_role,
         )
-        if first_join:
-            _notify_patient_waiting(appointment)
         return Response(payload)
 
     @action(detail=True, methods=["post"])
@@ -1546,13 +1626,21 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if appointment.status in (
             AppointmentStatus.COMPLETED,
             AppointmentStatus.CANCELLED,
+            AppointmentStatus.NO_SHOW,
+            # A consultation that has started is left, not cancelled: the
+            # doctor is in the room and the fee has been earned.
+            AppointmentStatus.IN_PROGRESS,
         ):
             return Response(
                 {"detail": "Cannot cancel."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         appointment.status = AppointmentStatus.CANCELLED
-        appointment.save(update_fields=["status", "updated_at"])
+        appointment.cancellation_reason = str(request.data.get("reason") or "")[:255]
+        appointment.save(
+            update_fields=["status", "cancellation_reason", "updated_at"]
+        )
+        _notify_provider_appointment_cancelled(appointment)
         return Response(AppointmentSerializer(appointment).data)
 
     @action(detail=True, methods=["post"])
@@ -1846,6 +1934,10 @@ class DiagnosticBookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCustomer]
     serializer_class = DiagnosticBookingSerializer
     pagination_class = GenericPaginationClass
+    # A patient cancels by PATCHing the status; nothing calls DELETE or PUT
+    # here, and a booking carries its results, so it is not a client's to
+    # destroy. The dashboard deletes through `AdminDiagnosticBookingViewSet`.
+    http_method_names = ["get", "post", "patch", "head", "options"]
     filterset_fields = ["status", "kind"]
     ordering_fields = ["created_at", "scheduled_date"]
 
@@ -2050,7 +2142,7 @@ class AIChatAPIView(APIView):
                 "source": result.source,
                 "metadata": result.metadata,
                 "attachment_url": (
-                    request.build_absolute_uri(user_message.attachment.url)
+                    stored_file_url(user_message.attachment, request)
                     if user_message.attachment
                     else None
                 ),
@@ -2111,7 +2203,7 @@ class AIChatSessionDetailAPIView(APIView):
                         "content": m.content,
                         "created_at": m.created_at,
                         "attachment_url": (
-                            request.build_absolute_uri(m.attachment.url)
+                            stored_file_url(m.attachment, request)
                             if m.attachment
                             else None
                         ),
@@ -2337,6 +2429,9 @@ class ProviderAppointmentListAPIView(APIView):
             AppointmentStatus.IN_PROGRESS,
             AppointmentStatus.COMPLETED,
             AppointmentStatus.CANCELLED,
+            # The patient did not turn up. Without this the doctor's only way
+            # to clear the row was "Completed", which paid them for it.
+            AppointmentStatus.NO_SHOW,
         }
         if new_status not in allowed:
             return Response(
@@ -2349,7 +2444,10 @@ class ProviderAppointmentListAPIView(APIView):
         update_fields = ["status", "updated_at"]
         if "prescription_notes" in request.data:
             update_fields.append("prescription_notes")
-        if new_status == AppointmentStatus.CANCELLED:
+        # A no-show carries a reason too ("Patient did not show up"), and it is
+        # the only record of why the slot was burnt, so it must not be dropped
+        # just because the status is not `cancelled`.
+        if new_status in (AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW):
             appointment.cancellation_reason = str(
                 request.data.get("cancellation_reason", ""),
             )[:255]
@@ -2439,11 +2537,32 @@ class ProviderDiagnosticBookingListAPIView(APIView):
             DiagnosticBooking.objects.filter(center=center)
             .select_related("patient", "center")
             .prefetch_related("tests__category", "packages")
-            .order_by("-scheduled_date", "-scheduled_time", "-created_at")
+            # Nulls first, explicitly: a booking with no slot yet is the one the
+            # centre has to act on, and it is also the one Postgres and SQLite
+            # order differently. It is not sorted to the bottom of a long list.
+            .order_by(
+                F("scheduled_date").desc(nulls_first=True),
+                F("scheduled_time").desc(nulls_first=True),
+                "-created_at",
+            )
         )
         status_filter = request.query_params.get("status")
+        bucket = request.query_params.get("bucket")
         if status_filter:
             qs = qs.filter(status=status_filter)
+        elif bucket:
+            qs = apply_bucket(qs, bucket, BOOKING_BUCKETS)
+        else:
+            # The working queue. Everything was returned before — including
+            # every booking the centre finished or cancelled — so the queue grew
+            # forever and never drained. Finished rows are still reachable with
+            # `?bucket=completed` / `?bucket=cancelled` / `?status=`.
+            qs = qs.exclude(
+                status__in=[
+                    DiagnosticBookingStatus.COMPLETED,
+                    DiagnosticBookingStatus.CANCELLED,
+                ],
+            )
         visit_type = request.query_params.get("visit_type")
         if visit_type:
             qs = qs.filter(visit_type=visit_type)
@@ -2545,6 +2664,10 @@ class ProviderAppointmentVideoTokenAPIView(APIView):
             user=request.user,
             role=client.doctor_role,
         )
+        # Minting here is what opens the room, and the patient's own join is
+        # gated on it, so this push is the only way they learn the call has
+        # started.
+        _notify_call_started(appointment)
         return Response(payload)
 
 
@@ -2670,6 +2793,12 @@ class ConsultationMessageSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
+    def to_representation(self, instance):
+        """A `private:<key>` attachment is signed here, never stored signed."""
+        data = super().to_representation(instance)
+        data["attachment_url"] = signed_url(instance.attachment_url)
+        return data
+
     def validate(self, attrs):
         kind = attrs.get("kind", ConsultationMessageKind.TEXT)
         body = (attrs.get("body") or "").strip()
@@ -2719,6 +2848,29 @@ class ConsultationMessagesAPIView(APIView):
 
     def post(self, request, appointment_id: int):
         appointment = self._appointment_for(request, appointment_id)
+        # Reading the thread back is always allowed; writing to it is not.
+        if not request.user.is_staff and not consultation_chat_is_open(appointment):
+            return Response(
+                {
+                    "detail": (
+                        "This consultation's chat is closed. Replies open 15 "
+                        "minutes before the appointment and stay open for a "
+                        "day after it finishes."
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        # The doctor opens the conversation. A patient who could post first was
+        # pushing a doctor who had not decided to take the consultation by chat
+        # at all.
+        if (
+            request.user.id == appointment.patient_id
+            and not doctor_opened_thread(appointment)
+        ):
+            return Response(
+                {"detail": "The doctor will start the conversation."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = ConsultationMessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         message = serializer.save(appointment=appointment, sender=request.user)
@@ -2995,9 +3147,7 @@ class AdminPrescriptionSerializer(serializers.ModelSerializer):
     def get_image_url(self, obj) -> str | None:
         if not obj.image:
             return None
-        request = self.context.get("request")
-        url = obj.image.url
-        return request.build_absolute_uri(url) if request else url
+        return stored_file_url(obj.image, self.context.get("request"))
 
     def get_order_count(self, obj) -> int:
         return obj.orders.count()
