@@ -68,6 +68,12 @@ def consultation_chat_is_open(appointment: Appointment) -> bool:
 
 
 def patient_can_join_video(appointment: Appointment) -> bool:
+    """The patient joins a call the doctor has already started, never opens one.
+
+    `video_started_at` is stamped by `mint_video_token`, and the patient can no
+    longer mint before it is set, so it can only have been set by the doctor —
+    no extra field is needed to record who opened the room.
+    """
     if appointment.consultation_mode != "online":
         return False
     if appointment.payment_status != AppointmentPaymentStatus.PAID:
@@ -77,7 +83,21 @@ def patient_can_join_video(appointment: Appointment) -> bool:
         AppointmentStatus.IN_PROGRESS,
     ):
         return False
+    if appointment.video_started_at is None:
+        return False
     return appointment_in_call_window(appointment)
+
+
+def doctor_opened_thread(appointment: Appointment) -> bool:
+    """Whether the doctor has written in this thread.
+
+    The doctor starts the conversation, so until there is a line from their
+    side the patient may read the thread but not post to it. Any sender who is
+    not the patient counts — staff answering on the doctor's behalf opens it
+    too, the same way `ConsultationMessageSerializer` renders them as the
+    doctor.
+    """
+    return appointment.messages.exclude(sender_id=appointment.patient_id).exists()
 
 
 def provider_can_join_video(appointment: Appointment) -> bool:

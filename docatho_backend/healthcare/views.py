@@ -83,6 +83,7 @@ from docatho_backend.healthcare.private_media import signed_url
 from docatho_backend.healthcare.private_media import stored_file_url
 from docatho_backend.healthcare.video import mint_video_token
 from docatho_backend.healthcare.video import consultation_chat_is_open
+from docatho_backend.healthcare.video import doctor_opened_thread
 from docatho_backend.healthcare.video import patient_can_join_video
 from docatho_backend.healthcare.video import provider_can_join_video
 from docatho_backend.masters.buckets import APPOINTMENT_BUCKETS
@@ -1089,16 +1090,18 @@ def notify_appointment_reminder(appointment):
     return sent
 
 
-def _notify_patient_waiting(appointment):
-    """The patient has opened the room; the doctor has not joined yet."""
-    provider_user = _provider_user_for(appointment)
-    if not provider_user:
-        return
+def _notify_call_started(appointment):
+    """The doctor has opened the room — tell the patient to come in.
+
+    Sent on every token the doctor mints, not only the first: a doctor who
+    drops out and rejoins is calling the patient again, and the patient may
+    have missed the first push.
+    """
     notify(
-        provider_user,
-        NotificationType.APPOINTMENT_WAITING,
-        f"{appointment.patient.name} is waiting in consultation room",
-        "Please join to start consultation",
+        appointment.patient,
+        NotificationType.CONSULTATION_CALL_STARTED,
+        f"Dr. {appointment.doctor.provider.name} is calling",
+        "Tap to join your video consultation",
         data=_appointment_notification_data(appointment),
     )
 
@@ -1610,17 +1613,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             "docatho_backend.healthcare.hms",
             fromlist=["HMSClient"],
         ).HMSClient()
-        # Read before minting: `mint_video_token` stamps `video_started_at`
-        # itself, so asking afterwards always answers "already started" and the
-        # doctor is never told anyone is waiting.
-        first_join = appointment.video_started_at is None
         payload = mint_video_token(
             appointment,
             user=request.user,
             role=client.patient_role,
         )
-        if first_join:
-            _notify_patient_waiting(appointment)
         return Response(payload)
 
     @action(detail=True, methods=["post"])
@@ -2667,6 +2664,10 @@ class ProviderAppointmentVideoTokenAPIView(APIView):
             user=request.user,
             role=client.doctor_role,
         )
+        # Minting here is what opens the room, and the patient's own join is
+        # gated on it, so this push is the only way they learn the call has
+        # started.
+        _notify_call_started(appointment)
         return Response(payload)
 
 
@@ -2857,6 +2858,17 @@ class ConsultationMessagesAPIView(APIView):
                         "day after it finishes."
                     ),
                 },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        # The doctor opens the conversation. A patient who could post first was
+        # pushing a doctor who had not decided to take the consultation by chat
+        # at all.
+        if (
+            request.user.id == appointment.patient_id
+            and not doctor_opened_thread(appointment)
+        ):
+            return Response(
+                {"detail": "The doctor will start the conversation."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         serializer = ConsultationMessageSerializer(data=request.data)

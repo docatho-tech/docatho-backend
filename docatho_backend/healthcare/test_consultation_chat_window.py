@@ -14,6 +14,7 @@ from django.utils import timezone
 from docatho_backend.healthcare.models import Appointment
 from docatho_backend.healthcare.models import AppointmentPaymentStatus
 from docatho_backend.healthcare.models import AppointmentStatus
+from docatho_backend.healthcare.models import ConsultationMessage
 from docatho_backend.testing.factories import DoctorProfileFactory
 from docatho_backend.testing.factories import UserFactory
 
@@ -34,6 +35,15 @@ def _appointment(**overrides):
     return Appointment.objects.create(**(defaults | overrides))
 
 
+def _doctor_opens(appointment):
+    """The doctor's first line — the patient may only reply to one."""
+    return ConsultationMessage.objects.create(
+        appointment=appointment,
+        sender=appointment.doctor.provider.user,
+        body="Hello, how can I help?",
+    )
+
+
 def _send(auth_client, appointment):
     return auth_client(appointment.patient).post(
         f"/api/healthcare/appointments/{appointment.pk}/messages/",
@@ -42,14 +52,24 @@ def _send(auth_client, appointment):
     )
 
 
-def test_patient_can_message_inside_the_window(auth_client):
+def test_patient_can_reply_inside_the_window(auth_client):
     appointment = _appointment()
+    _doctor_opens(appointment)
     assert _send(auth_client, appointment).status_code == 201
+
+
+def test_patient_cannot_open_the_thread(auth_client):
+    """The doctor starts the conversation, even inside the window."""
+    appointment = _appointment()
+    resp = _send(auth_client, appointment)
+    assert resp.status_code == 403
+    assert appointment.messages.count() == 0
 
 
 def test_a_free_consultation_is_not_shut_out(auth_client):
     """Zero-fee bookings are marked paid without the gateway."""
     appointment = _appointment(fee=Decimal("0.00"), payment_method="free")
+    _doctor_opens(appointment)
     assert _send(auth_client, appointment).status_code == 201
 
 
@@ -73,9 +93,11 @@ def test_a_free_consultation_is_not_shut_out(auth_client):
 )
 def test_closed_threads_reject_the_message(auth_client, label, overrides):
     appointment = _appointment(**overrides)
+    _doctor_opens(appointment)
     resp = _send(auth_client, appointment)
     assert resp.status_code == 403, f"{label}: {resp.status_code}"
-    assert appointment.messages.count() == 0
+    # Only the doctor's opening line, never the patient's rejected reply.
+    assert appointment.messages.count() == 1
 
 
 def test_a_just_finished_consultation_still_takes_a_follow_up(auth_client):
@@ -83,6 +105,7 @@ def test_a_just_finished_consultation_still_takes_a_follow_up(auth_client):
         status=AppointmentStatus.COMPLETED,
         completed_at=timezone.now() - timedelta(hours=1),
     )
+    _doctor_opens(appointment)
     assert _send(auth_client, appointment).status_code == 201
 
 
